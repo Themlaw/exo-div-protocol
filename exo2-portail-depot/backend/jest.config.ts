@@ -13,7 +13,7 @@ const paths = tsconfig?.compilerOptions?.paths ?? {};
 const config: Config = {
   moduleFileExtensions: ['js', 'json', 'ts'],
   rootDir: '.',
-  roots: ['<rootDir>/test'],
+  roots: ['<rootDir>/test/unit'],
   testRegex: '.*\\.spec\\.ts$',
   // L'historique d'appels des mocks fuirait d'un test a l'autre sans cette remise a zero.
   clearMocks: true,

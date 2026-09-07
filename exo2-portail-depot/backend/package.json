@@ -1,7 +1,7 @@
 {
   "name": "portail-depot-backend",
   "version": "0.0.1",
-  "description": "Portail de depot de pieces — API NestJS",
+  "description": "Portail de depot de pieces \u2014 API NestJS",
   "author": "",
   "private": true,
   "license": "UNLICENSED",
@@ -21,30 +21,38 @@
     "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-integration.json"
   },
   "dependencies": {
-    "@nestjs/common": "^12.0.1",
-    "@nestjs/core": "^12.0.1",
-    "@nestjs/platform-express": "^12.0.1",
-    "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "@nestjs/common": "12.0.1",
+    "@nestjs/core": "12.0.1",
+    "@nestjs/platform-express": "12.0.1",
+    "@node-rs/argon2": "2.2.0",
+    "better-auth": "1.7.3",
+    "drizzle-orm": "0.45.2",
+    "postgres": "3.4.9",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
   },
   "devDependencies": {
-    "@nestjs/cli": "^12.0.0",
-    "@nestjs/schematics": "^12.0.0",
-    "@nestjs/testing": "^12.0.1",
-    "@types/express": "^5.0.0",
-    "@types/jest": "^30.0.0",
-    "@types/node": "^24.0.0",
-    "@types/supertest": "^7.0.0",
-    "fast-check": "^4.9.0",
-    "jest": "^30.0.0",
-    "oxlint": "^1.58.0",
-    "prettier": "^3.4.2",
-    "source-map-support": "^0.5.21",
-    "supertest": "^7.0.0",
-    "ts-jest": "^29.2.5",
-    "ts-loader": "^9.5.2",
-    "ts-node": "^10.9.2",
-    "tsconfig-paths": "^4.2.0",
-    "typescript": "^6.0.2"
+    "@nestjs/cli": "12.0.0",
+    "@nestjs/schematics": "12.0.0",
+    "@nestjs/testing": "12.0.1",
+    "@types/express": "5.0.6",
+    "@types/jest": "30.0.0",
+    "@types/node": "24.13.3",
+    "@types/supertest": "7.2.1",
+    "drizzle-kit": "0.31.10",
+    "fast-check": "4.9.0",
+    "jest": "30.5.1",
+    "oxlint": "1.81.0",
+    "prettier": "3.9.6",
+    "source-map-support": "0.5.21",
+    "supertest": "7.2.2",
+    "ts-jest": "29.4.12",
+    "ts-loader": "9.6.2",
+    "ts-node": "10.9.2",
+    "tsconfig-paths": "4.2.0",
+    "typescript": "6.0.3"
+  },
+  "overrides": {
+    "esbuild": "0.25.12"
   }
 }

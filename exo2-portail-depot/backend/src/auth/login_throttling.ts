@@ -1,4 +1,4 @@
-import { NotImplementedError } from '../domain/not_implemented';
+import { isIP } from 'node:net';
 
 // Pas de verrouillage de compte : contrairement au PIN d'un lien, un avocat
 // verrouille n'a personne pour le debloquer, et connaitre son email suffirait
@@ -35,11 +35,18 @@ export const LOGIN_IP_RATE_LIMIT_BOUNDS = {
 // fait que ralentir un peu plus tot, ce qui est sans consequence puisque la
 // limite par IP est volontairement haute.
 export function count_failed_attempts_within_window(
-  _failure_timestamps: readonly Date[],
-  _now: Date,
-  _window_seconds: number,
+  failure_timestamps: readonly Date[],
+  now: Date,
+  window_seconds: number,
 ): number {
-  throw new NotImplementedError('count_failed_attempts_within_window');
+  const window_start_timestamp: number = now.getTime() - window_seconds * 1000;
+
+  return failure_timestamps.filter((failure_timestamp: Date): boolean => {
+    // Borne inclusive, et un horodatage futur (horloge decalee) est traite
+    // comme recent : sous-compter ouvrirait la limite, sur-compter ne fait
+    // que ralentir un peu plus tot.
+    return failure_timestamp.getTime() >= window_start_timestamp;
+  }).length;
 }
 
 // Un X-Forwarded-For est une liste dont le client controle entierement le
@@ -51,15 +58,49 @@ export function count_failed_attempts_within_window(
 // directe de la connexion — la seule que le client ne peut pas ecrire. Un repli
 // permissif rendrait la limite contournable en envoyant une chaine tronquee.
 export function resolve_trusted_client_ip(
-  _forwarded_for_chain: readonly string[],
-  _direct_remote_address: string,
-  _trusted_proxy_hop_count: number,
+  forwarded_for_chain: readonly string[],
+  direct_remote_address: string,
+  trusted_proxy_hop_count: number,
 ): string {
-  throw new NotImplementedError('resolve_trusted_client_ip');
+  // Zero saut de confiance declare, ou une chaine plus courte que le nombre de
+  // sauts declares : aucune entree de la chaine n'est fiable, on retombe sur
+  // l'adresse directe.
+  if (
+    trusted_proxy_hop_count <= 0 ||
+    trusted_proxy_hop_count > forwarded_for_chain.length
+  ) {
+    return direct_remote_address;
+  }
+
+  const candidate_index: number =
+    forwarded_for_chain.length - trusted_proxy_hop_count;
+  const candidate_ip: string = forwarded_for_chain[candidate_index].trim();
+
+  // Une entree qui n'est pas une adresse IP exploitable n'est pas retenue
+  // comme identite de limitation : on ne fait pas confiance a une valeur non
+  // conforme, meme situee au bon endroit de la chaine.
+  if (isIP(candidate_ip) === 0) {
+    return direct_remote_address;
+  }
+
+  return candidate_ip;
 }
 
 export function compute_login_backoff_delay_seconds(
-  _consecutive_failed_attempts: number,
+  consecutive_failed_attempts: number,
 ): number {
-  throw new NotImplementedError('compute_login_backoff_delay_seconds');
+  if (consecutive_failed_attempts < LOGIN_BACKOFF_BOUNDS.attempts_before_backoff) {
+    return 0;
+  }
+
+  const attempts_past_threshold: number =
+    consecutive_failed_attempts - LOGIN_BACKOFF_BOUNDS.attempts_before_backoff;
+
+  // Croissance exponentielle a partir du seuil, plafonnee : on ralentit, on ne
+  // ferme jamais, et le delai ne doit jamais depasser le plafond meme pour un
+  // tres grand nombre de tentatives (ni devenir negatif par depassement numerique).
+  const exponential_delay_seconds: number =
+    LOGIN_BACKOFF_BOUNDS.initial_delay_seconds * 2 ** attempts_past_threshold;
+
+  return Math.min(exponential_delay_seconds, LOGIN_BACKOFF_BOUNDS.max_delay_seconds);
 }

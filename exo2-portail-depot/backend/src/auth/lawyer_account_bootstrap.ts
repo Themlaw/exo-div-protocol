@@ -1,5 +1,3 @@
-import { NotImplementedError } from '../domain/not_implemented';
-
 export type NodeEnvironment = 'development' | 'test' | 'production';
 
 export interface LawyerAccountBootstrapInput {
@@ -18,11 +16,22 @@ export interface LawyerAccountRepository {
   create(input: LawyerAccountBootstrapInput): Promise<string>;
 }
 
-export function bootstrap_demo_lawyer_account(
-  _input: LawyerAccountBootstrapInput,
-  _dependencies: { lawyer_accounts: LawyerAccountRepository },
+export async function bootstrap_demo_lawyer_account(
+  input: LawyerAccountBootstrapInput,
+  dependencies: { lawyer_accounts: LawyerAccountRepository },
 ): Promise<LawyerAccountBootstrapOutcome> {
-  throw new NotImplementedError('bootstrap_demo_lawyer_account');
+  const existing_id: string | null = await dependencies.lawyer_accounts.find_id_by_email(
+    input.email,
+  );
+
+  // Idempotent : relancer install.sh ne doit rien dupliquer ni echouer, donc
+  // un compte deja present n'est pas recree.
+  if (existing_id !== null) {
+    return { account_was_created: false };
+  }
+
+  await dependencies.lawyer_accounts.create(input);
+  return { account_was_created: true };
 }
 
 export class DevelopmentSeedInProductionError extends Error {
@@ -33,7 +42,10 @@ export class DevelopmentSeedInProductionError extends Error {
 }
 
 export function assert_development_seed_allowed(
-  _node_environment: NodeEnvironment,
+  node_environment: NodeEnvironment,
 ): void {
-  throw new NotImplementedError('assert_development_seed_allowed');
+  // Seed de developpement : donnees d'exemple, jamais executees en production.
+  if (node_environment === 'production') {
+    throw new DevelopmentSeedInProductionError();
+  }
 }

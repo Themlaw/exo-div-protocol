@@ -1,5 +1,4 @@
 import { SetMetadata } from '@nestjs/common';
-import { NotImplementedError } from '../domain/not_implemented';
 
 // Une route « publique » n'est pas une categorie unique. « Ouvert au client
 // anonyme » et « appele par MinIO avec un secret partage » n'ont rien a voir :
@@ -30,7 +29,19 @@ export class ConflictingRouteAccessError extends Error {
 }
 
 export function resolve_route_access_kind(
-  _declared_kinds: readonly RouteAccessKind[],
+  declared_kinds: readonly RouteAccessKind[],
 ): RouteAccessKind {
-  throw new NotImplementedError('resolve_route_access_kind');
+  if (declared_kinds.length === 0) {
+    return DEFAULT_ROUTE_ACCESS_KIND;
+  }
+
+  // Le meme kind peut etre declare a la fois sur la classe et sur la methode :
+  // ce n'est pas une ambiguite, seulement une redondance a tolerer.
+  const distinct_kinds: RouteAccessKind[] = [...new Set(declared_kinds)];
+
+  if (distinct_kinds.length > 1) {
+    throw new ConflictingRouteAccessError(declared_kinds);
+  }
+
+  return distinct_kinds[0];
 }

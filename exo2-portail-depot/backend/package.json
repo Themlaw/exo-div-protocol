@@ -19,8 +19,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json",
     "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-integration.json",
-    "db:generate": "node tooling/node_modules/drizzle-kit/bin.cjs generate",
-    "db:check": "node tooling/node_modules/drizzle-kit/bin.cjs check"
+    "db:generate": "node tooling/node_modules/drizzle-kit/bin.cjs generate --config tooling/drizzle.config.ts",
+    "db:check": "node tooling/node_modules/drizzle-kit/bin.cjs check --config tooling/drizzle.config.ts"
   },
   "dependencies": {
     "@nestjs/common": "12.0.1",

@@ -1,0 +1,11 @@
+{
+  "name": "exo2-portail-depot-tooling",
+  "private": true,
+  "description": "Outillage de developpement isole du paquet applicatif. drizzle-kit est un peer optionnel de better-auth : declare dans backend/package.json, npm le marque dev=false et l'installe donc dans l'arbre de production malgre --omit=dev, avec esbuild et ses 28 paquets de plateforme. Isole ici, il ne sort jamais du poste de dev et de la CI ; la production n'applique que des .sql via drizzle-orm.",
+  "devDependencies": {
+    "drizzle-kit": "0.31.10"
+  },
+  "overrides": {
+    "esbuild": "0.25.12"
+  }
+}

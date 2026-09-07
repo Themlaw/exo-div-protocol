@@ -18,7 +18,9 @@
     "test:cov": "NODE_OPTIONS=--experimental-vm-modules jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json",
-    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-integration.json"
+    "test:integration": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-integration.json",
+    "db:generate": "node tooling/node_modules/drizzle-kit/bin.cjs generate",
+    "db:check": "node tooling/node_modules/drizzle-kit/bin.cjs check"
   },
   "dependencies": {
     "@nestjs/common": "12.0.1",
@@ -39,7 +41,6 @@
     "@types/jest": "30.0.0",
     "@types/node": "24.13.3",
     "@types/supertest": "7.2.1",
-    "drizzle-kit": "0.31.10",
     "fast-check": "4.9.0",
     "jest": "30.5.1",
     "oxlint": "1.81.0",
@@ -51,8 +52,5 @@
     "ts-node": "10.9.2",
     "tsconfig-paths": "4.2.0",
     "typescript": "6.0.3"
-  },
-  "overrides": {
-    "esbuild": "0.25.12"
   }
 }

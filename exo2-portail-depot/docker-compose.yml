@@ -1,0 +1,114 @@
+# Durcissement applique a tous les services : on part du principe qu'un attaquant
+# finira dans un conteneur, et on cherche a ce qu'il n'y trouve rien a faire.
+#
+# Chaque service tourne en 1000:1000 (jamais root), avec un systeme de fichiers
+# racine en lecture seule, toutes les capabilities Linux retirees, et l'interdiction
+# d'acquerir de nouveaux privileges — ce qui neutralise l'escalade par binaire suid.
+#
+# Les repertoires de ./data doivent appartenir a 1000:1000 AVANT le premier
+# demarrage : un volume nomme serait cree root et le conteneur non-root ne
+# pourrait pas y ecrire. C'est install.sh qui les cree avec le bon proprietaire.
+
+name: portail-depot
+
+services:
+  postgres:
+    # Version epinglee au correctif : `17-alpine` glisserait d'un `docker pull` a l'autre.
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Sous-repertoire explicite : initdb refuse un repertoire de donnees
+      # contenant deja quoi que ce soit, y compris un point de montage.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    tmpfs:
+      # Les seuls chemins que Postgres doit ecrire hors de PGDATA. `noexec` et
+      # `nosuid` empechent d'y deposer puis d'y executer un binaire.
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /var/run/postgresql:rw,noexec,nosuid,size=16m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      # Postgres ne touche QUE `datastore`. Il n'est joignable par rien d'autre
+      # que l'application et le worker, et Traefik lui-meme ne peut pas l'atteindre.
+      - datastore
+
+  minio:
+    # Dernier RELEASE publie. Jamais `latest` : l'image du serveur doit etre
+    # exactement celle qu'on a testee en local.
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./data/minio:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - datastore
+      # MinIO doit etre joignable par le NAVIGATEUR : on a choisi l'upload
+      # pre-signe direct, les octets ne passent pas par l'API. Il rejoint donc
+      # `proxied` pour que Traefik puisse le router — sans y gagner d'acces
+      # sortant, puisque ce reseau est lui aussi interne.
+      - proxied
+
+networks:
+  # Seul Traefik sera attache a `edge`. C'est ce qui fait de lui le pont unique
+  # vers l'exterieur : les services qu'il route restent sur des reseaux internes
+  # et n'ont, eux, aucun acces sortant.
+  edge:
+    driver: bridge
+
+  # Traefik + les services publiquement routes (application, MinIO).
+  # `internal: true` : porter du trafic conteneur a conteneur n'exige pas de
+  # passerelle. Traefik atteint ces services, eux n'atteignent pas Internet.
+  proxied:
+    internal: true
+
+  datastore:
+    # `internal: true` coupe tout acces sortant vers Internet. Ni Postgres ni
+    # MinIO n'ont de raison d'appeler l'exterieur ; leur en retirer le moyen
+    # supprime l'exfiltration directe depuis un conteneur compromis.
+    #
+    # Consequence a connaitre : Docker **ne peut pas publier de port** pour un
+    # conteneur attache au seul reseau interne — il n'y a ni passerelle ni NAT —
+    # et il ignore la directive `ports` en silence. Aucun port n'est donc publie
+    # ici. Pour un acces depuis l'hote en developpement, utiliser
+    # `docker-compose.dev.yml`.
+    internal: true
+
+# Topologie a l'arrivee des services restants :
+#
+#   traefik   -> edge + proxied                 (seul pont vers l'exterieur)
+#   app       -> proxied + datastore            (route par Traefik, parle a la base)
+#   worker    -> datastore                      (jamais expose, meme via Traefik)
+#   minio     -> proxied + datastore            (routable, car upload direct navigateur)
+#   postgres  -> datastore                      (joignable par rien d'autre)

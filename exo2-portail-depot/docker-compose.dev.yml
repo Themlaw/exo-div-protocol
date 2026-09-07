@@ -1,0 +1,34 @@
+# Surcouche de DEVELOPPEMENT uniquement.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Elle n'est jamais deployee : `install.sh` n'utilise que le fichier de base.
+# Le nom n'est volontairement pas `docker-compose.override.yml`, qui serait
+# charge automatiquement et pourrait relacher la production sans qu'on le voie.
+#
+# Ce qu'elle change, et ce que ca coute : elle attache Postgres et MinIO a un
+# second reseau non interne pour que l'hote puisse les joindre. Ils y regagnent
+# donc un acces sortant. C'est acceptable en local, ou le modele de menace n'est
+# pas celui du serveur partage — mais c'est bien une protection en moins.
+
+services:
+  postgres:
+    networks:
+      - datastore
+      - hostaccess
+    ports:
+      # Jamais 0.0.0.0, meme en local : la machine de developpement est aussi
+      # sur un reseau.
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+
+  minio:
+    networks:
+      - datastore
+      - hostaccess
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT}:9001"
+
+networks:
+  hostaccess:
+    driver: bridge

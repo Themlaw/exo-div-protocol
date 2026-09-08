@@ -1,20 +1,13 @@
 import type { NodeEnvironment } from '../shared/node_environment';
-
-// Bornes sur le mot de passe EN CLAIR recu, jamais sur son hachage.
-// Minimum a 12 et non au plancher habituel de 8 : c'est install.sh qui genere
-// cette valeur, et ce compte est le seul acces avocat de l'installation.
-// Maximum a 256 pour la meme raison que le PIN borne a 64 : une chaine enorme
-// envoyee a un hachage lent est un vecteur de deni de service.
-export const LAWYER_PASSWORD_LENGTH_BOUNDS = { min: 12, max: 256 } as const;
-
-// RFC 5321. Au-dela, aucune boite reelle ne recevra le courrier.
-export const MAXIMUM_LAWYER_EMAIL_LENGTH = 254;
-
-// Volontairement large : « quelque chose, une arobase, un domaine pointe, aucun
-// espace ». Une regex stricte rejette des adresses valides sans rien protoger de
-// plus, et rien ici ne depend de la forme exacte de l'adresse. En particulier
-// aucune borne sur le dernier segment : .museum en fait 6, .international 13.
-const LAWYER_EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import {
+  find_lawyer_password_length_violation,
+  has_lawyer_email_shape,
+  is_lawyer_email_too_long,
+  normalize_lawyer_email,
+  LAWYER_PASSWORD_LENGTH_BOUNDS,
+  MAXIMUM_LAWYER_EMAIL_LENGTH,
+  type LawyerPasswordLengthViolation,
+} from '../shared/lawyer_credentials';
 
 export type LawyerAccountBootstrapViolationField = 'email' | 'plaintext_password';
 
@@ -74,13 +67,6 @@ export interface LawyerAccountRepository {
   create(input: LawyerAccountBootstrapInput): Promise<string>;
 }
 
-// La contrainte d'unicite porte sur la colonne telle qu'elle est stockee : sans
-// normalisation, `Demo@X.fr` et `demo@x.fr` sont deux lignes distinctes et
-// l'unicite ne protege plus de rien.
-export function normalize_lawyer_email(email: string): string {
-  return email.trim().toLowerCase();
-}
-
 // Toutes les violations sont collectees, pas seulement la premiere : celui qui
 // lance install.sh corrige son environnement en une passe au lieu de decouvrir
 // les erreurs une par une.
@@ -90,24 +76,23 @@ function collect_bootstrap_violations(
 ): readonly LawyerAccountBootstrapViolation[] {
   const violations: LawyerAccountBootstrapViolation[] = [];
 
-  if (normalized_email.length > MAXIMUM_LAWYER_EMAIL_LENGTH) {
+  if (is_lawyer_email_too_long(normalized_email)) {
     violations.push({
       field: 'email',
       reason: `depasse ${MAXIMUM_LAWYER_EMAIL_LENGTH} caracteres`,
     });
-  } else if (!LAWYER_EMAIL_SHAPE.test(normalized_email)) {
+  } else if (!has_lawyer_email_shape(normalized_email)) {
     violations.push({ field: 'email', reason: "n'a pas la forme d'une adresse" });
   }
 
-  // Aucune regle de complexite volontairement : install.sh genere une phrase de
-  // passe de cinq mots, sans majuscule ni caractere special. Une regle de
-  // complexite invaliderait cette valeur et pousserait vers plus court.
-  if (plaintext_password.length < LAWYER_PASSWORD_LENGTH_BOUNDS.min) {
+  const password_length_violation: LawyerPasswordLengthViolation =
+    find_lawyer_password_length_violation(plaintext_password);
+  if (password_length_violation === 'too_short') {
     violations.push({
       field: 'plaintext_password',
       reason: `plus court que ${LAWYER_PASSWORD_LENGTH_BOUNDS.min} caracteres`,
     });
-  } else if (plaintext_password.length > LAWYER_PASSWORD_LENGTH_BOUNDS.max) {
+  } else if (password_length_violation === 'too_long') {
     violations.push({
       field: 'plaintext_password',
       reason: `depasse ${LAWYER_PASSWORD_LENGTH_BOUNDS.max} caracteres`,

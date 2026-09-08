@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { SetMetadata } from '@nestjs/common';
 
 // Une route « publique » n'est pas une categorie unique. « Ouvert au client
@@ -44,4 +45,32 @@ export function resolve_route_access_kind(
   }
 
   return distinct_kinds[0];
+}
+
+// --- Contrat issu de la revue de securite du 2026-09-08 ---
+// `Reflect.getMetadata` remonte la chaine de prototypes : un controleur qui
+// herite d'une classe decoree recupere son acces sans porter aucun decorateur.
+// Un `class DepositRequestsController extends BaseProbeController` — ou la base
+// est marquee @HealthRoute() pour une sonde — ouvrirait toutes ses routes sans
+// que rien ne soit visible a la lecture, et sans declencher le detecteur de
+// conflit puisqu'un seul acces est declare.
+//
+// Lit donc les metadonnees PROPRES de chaque cible, jamais celles heritees.
+export function read_own_route_access_kinds(
+  targets: readonly object[],
+): readonly RouteAccessKind[] {
+  const declared_kinds: RouteAccessKind[] = [];
+
+  for (const target of targets) {
+    // `getOwnMetadata` et non `getMetadata` : le second remonte la chaine de
+    // prototypes. Et la LISTE complete, pas la valeur gagnante : lu avec un
+    // `getAllAndOverride`, qui n'en rend qu'une, ConflictingRouteAccessError
+    // deviendrait du code mort et un acces de classe serait ecrase sans bruit.
+    const own_kind: unknown = Reflect.getOwnMetadata(ROUTE_ACCESS_METADATA_KEY, target);
+    if (own_kind !== undefined) {
+      declared_kinds.push(own_kind as RouteAccessKind);
+    }
+  }
+
+  return declared_kinds;
 }

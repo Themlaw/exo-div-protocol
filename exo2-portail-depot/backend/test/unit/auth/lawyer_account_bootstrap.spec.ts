@@ -1,17 +1,19 @@
 import {
   bootstrap_demo_lawyer_account,
   assert_development_seed_allowed,
-  normalize_lawyer_email,
   DevelopmentSeedInProductionError,
   InvalidLawyerAccountBootstrapInputError,
   LawyerAccountAlreadyExistsError,
-  LAWYER_PASSWORD_LENGTH_BOUNDS,
-  MAXIMUM_LAWYER_EMAIL_LENGTH,
   type LawyerAccountBootstrapInput,
   type LawyerAccountBootstrapOutcome,
   type LawyerAccountRepository,
 } from '../../../src/auth/lawyer_account_bootstrap';
 import type { NodeEnvironment } from '../../../src/shared/node_environment';
+import {
+  normalize_lawyer_email,
+  LAWYER_PASSWORD_LENGTH_BOUNDS,
+  MAXIMUM_LAWYER_EMAIL_LENGTH,
+} from '../../../src/shared/lawyer_credentials';
 
 function build_lawyer_accounts_repository(
   existing_id: string | null,

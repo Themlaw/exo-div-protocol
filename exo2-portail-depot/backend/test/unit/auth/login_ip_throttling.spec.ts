@@ -125,7 +125,9 @@ describe('resolve_trusted_client_ip', () => {
     () => {
       const forwarded_for_chain: readonly string[] = ['1.2.3.4', '5.6.7.8', '10.0.0.1'];
 
-      const result: string = resolve_trusted_client_ip(
+      // `string | null` depuis la revue : une adresse non stockable ne doit pas
+      // etre rendue telle quelle, l'INSERT du compteur echouerait.
+      const result: string | null = resolve_trusted_client_ip(
         forwarded_for_chain,
         '203.0.113.9',
         1,

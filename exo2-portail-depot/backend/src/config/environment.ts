@@ -2,6 +2,12 @@ import {
   is_valid_node_environment,
   type NodeEnvironment,
 } from '../shared/node_environment';
+import {
+  find_lawyer_password_length_violation,
+  has_lawyer_email_shape,
+  is_lawyer_email_too_long,
+  normalize_lawyer_email,
+} from '../shared/lawyer_credentials';
 
 // Les noms sont fixes ICI, et nulle part ailleurs : `.env.example`, install.sh
 // et les tests s'y referent tous. Sans source unique, chacun devine les siens et
@@ -16,6 +22,7 @@ export const ENVIRONMENT_VARIABLE_NAMES = {
   minio_root_password: 'MINIO_ROOT_PASSWORD',
   demo_lawyer_email: 'DEMO_LAWYER_EMAIL',
   demo_lawyer_password: 'DEMO_LAWYER_PASSWORD',
+  trusted_proxy_hop_count: 'TRUSTED_PROXY_HOP_COUNT',
 } as const satisfies Record<keyof ApplicationEnvironment, string>;
 
 export const REQUIRED_ENVIRONMENT_VARIABLES: readonly string[] =
@@ -25,17 +32,32 @@ export interface ApplicationEnvironment {
   node_environment: NodeEnvironment;
   database_url: string;
   access_link_token_pepper: string;
-  // MinIO signe ses notifications d'objet avec ce secret. Sans lui, n'importe qui
-  // pourrait declarer l'arrivee d'un fichier sain.
+  // Jeton porteur envoye par MinIO dans l'en-tete Authorization de ses
+  // notifications d'objet. MinIO ne SIGNE rien : le corps n'est pas authentifie,
+  // donc ce secret n'est qu'une deuxieme barriere — la premiere est l'isolation
+  // reseau, la route n'etant pas publiee par Traefik. Sa comparaison doit se
+  // faire a temps constant, ce qu'une vraie signature n'aurait pas exige.
   internal_storage_webhook_secret: string;
   minio_endpoint: string;
   minio_root_user: string;
   minio_root_password: string;
   demo_lawyer_email: string;
   demo_lawyer_password: string;
+  // Nombre de relais de confiance a remonter dans X-Forwarded-For. Obligatoire
+  // et non optionnel : c'est le parametre le plus sensible de la limitation par
+  // adresse, et une valeur absente ou illisible ferait soit retomber
+  // silencieusement sur l'adresse directe, soit lever sur chaque connexion.
+  // `0` est legitime — c'est le mode degrade, ou le proxy frontal ne peut pas
+  // ajouter l'en-tete.
+  trusted_proxy_hop_count: number;
 }
 
-export type EnvironmentViolationReason = 'missing' | 'malformed';
+export type EnvironmentViolationReason =
+  | 'missing'
+  | 'malformed'
+  // Une valeur de developpement qui atteint la production est un secret que
+  // tout le monde connait, et elle passe tous les controles de forme.
+  | 'development_value_in_production';
 
 export interface EnvironmentViolation {
   variable: string;
@@ -56,11 +78,76 @@ export class InvalidEnvironmentError extends Error {
   }
 }
 
-// Le poivre protege tous les tokens de lien : un poivre court annule l'interet
-// du HMAC, et c'est le genre de valeur qu'on tronque par accident.
-export const MINIMUM_ACCESS_LINK_TOKEN_PEPPER_LENGTH = 32;
+// Longueurs comptees en CARACTERES, et install.sh genere de l'hexadecimal :
+// 64 caracteres hex valent 32 octets, soit la taille de sortie de SHA-256, qui
+// est le plancher raisonnable pour une clef HMAC-SHA256 (RFC 2104 ; au-dela de
+// 64 octets la clef est de toute facon re-hachee). Passer install.sh en base64url
+// changerait ce compte — 32 octets n'y font que 43 caracteres — et ces
+// constantes devraient suivre.
+export const MINIMUM_ACCESS_LINK_TOKEN_PEPPER_LENGTH = 64;
 
-export const MINIMUM_INTERNAL_STORAGE_WEBHOOK_SECRET_LENGTH = 32;
+export const MINIMUM_INTERNAL_STORAGE_WEBHOOK_SECRET_LENGTH = 64;
+
+// Identifiant par defaut documente de MinIO, donc le copier-coller le plus
+// probable de tous.
+export const MINIO_DEFAULT_ROOT_CREDENTIAL = 'minioadmin';
+
+// Fragments qu'on ecrit machinalement en developpement et qui ne doivent jamais
+// atteindre la production. La comparaison est une INCLUSION, pas une egalite :
+// une liste d'egalites strictes ne coute rien a contourner (`changeme1`), et
+// c'est precisement ce que fait quelqu'un de presse.
+//
+// L'inclusion interdit en revanche les fragments courts et courants. `test` et
+// `portail` ont ete retires pour cette raison : « attestation » contient
+// « test », et « portail » est le nom du projet, present dans des identifiants
+// legitimes. `admin` de meme — `portail-admin` est un nom d'utilisateur
+// plausible en production.
+//
+// Faux positif assume : la phrase de passe generee par install.sh pourrait
+// contenir l'un de ces mots. L'application refuserait alors de demarrer avec un
+// message clair, et il suffirait de relancer la generation — nettement moins
+// grave que l'inverse.
+export const FORBIDDEN_PRODUCTION_PLACEHOLDER_FRAGMENTS: readonly string[] = [
+  'changeme',
+  'change-me',
+  'change_me',
+  'a-changer',
+  'tochange',
+  'password',
+  'motdepasse',
+  'passwd',
+  'secret',
+  'azerty',
+  'qwerty',
+  '123456',
+  'default',
+  'example',
+  'todo',
+  MINIO_DEFAULT_ROOT_CREDENTIAL,
+];
+
+// En production, la base et MinIO sont joints par leur nom de service Docker :
+// une adresse de bouclage trahit un .env de developpement recopie tel quel.
+//
+// Une liste de chaines litterales ne suffit pas : `postgres:` n'etant pas un
+// schema « special » au sens WHATWG, `new URL()` ne canonicalise pas l'hote
+// IPv4, et `127.1`, `2130706433`, `0177.0.0.1` ou `localhost.` passaient tous
+// alors qu'ils resolvent vers la boucle locale. On decide donc sur la valeur
+// numerique de l'adresse, pas sur son ecriture.
+const LOOPBACK_HOSTNAMES: readonly string[] = ['localhost', '::1', '::'];
+
+// Domaines reserves a la documentation et aux essais (RFC 2606 / 6761). Un
+// compte avocat de demonstration ne doit pas en porter en production.
+const NON_DELIVERABLE_EMAIL_DOMAIN_SUFFIXES: readonly string[] = [
+  '.test',
+  '.local',
+  '.invalid',
+  '.localhost',
+  '.example',
+  'example.com',
+  'example.org',
+  'example.net',
+];
 
 function is_postgres_database_url(value: string): boolean {
   try {
@@ -71,8 +158,190 @@ function is_postgres_database_url(value: string): boolean {
   }
 }
 
-// `unknown` plutot que `any` a la frontiere : on recoit des chaines non fiables
-// depuis l'environnement, et on ne les tient pour valides qu'apres controle.
+// Volontairement strict : `Number()` accepte '1e3', ' 1 ' et '0x1', et rend NaN
+// sur '' — autant de valeurs qui produiraient une limitation par adresse
+// silencieusement fausse, voire une TypeError sur chaque connexion. Seule une
+// suite de chiffres est acceptee.
+const NON_NEGATIVE_INTEGER_SHAPE = /^\d+$/;
+
+function parse_non_negative_integer(value: string): number | null {
+  if (!NON_NEGATIVE_INTEGER_SHAPE.test(value)) {
+    return null;
+  }
+  const parsed: number = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function contains_forbidden_production_placeholder(value: string): boolean {
+  const normalized_value: string = value.trim().toLowerCase();
+  return FORBIDDEN_PRODUCTION_PLACEHOLDER_FRAGMENTS.some((fragment: string): boolean =>
+    normalized_value.includes(fragment),
+  );
+}
+
+// Rend l'entier 32 bits d'un hote ecrit en IPv4, quelle que soit sa notation :
+// decimale pointee, entier unique, octal, hexadecimal, formes courtes. C'est
+// exactement ce que fait `inet_addr`, et ce que fait le resolveur du systeme.
+function parse_ipv4_host_as_integer(hostname: string): number | null {
+  const parts: readonly string[] = hostname.split('.');
+  if (parts.length === 0 || parts.length > 4) {
+    return null;
+  }
+
+  const part_values: number[] = [];
+  for (const part of parts) {
+    if (part === '') {
+      return null;
+    }
+    let part_value: number;
+    if (/^0[xX][0-9a-fA-F]+$/.test(part)) {
+      part_value = Number.parseInt(part.slice(2), 16);
+    } else if (/^0[0-7]+$/.test(part)) {
+      part_value = Number.parseInt(part.slice(1), 8);
+    } else if (/^\d+$/.test(part)) {
+      part_value = Number.parseInt(part, 10);
+    } else {
+      return null;
+    }
+    if (!Number.isSafeInteger(part_value) || part_value < 0) {
+      return null;
+    }
+    part_values.push(part_value);
+  }
+
+  // Les formes courtes : la derniere composante couvre les octets restants.
+  const last_value: number = part_values[part_values.length - 1]!;
+  const leading_values: readonly number[] = part_values.slice(0, -1);
+  if (leading_values.some((value: number): boolean => value > 255)) {
+    return null;
+  }
+  const remaining_octets: number = 4 - leading_values.length;
+  if (last_value >= 2 ** (8 * remaining_octets)) {
+    return null;
+  }
+
+  let address_as_integer: number = last_value;
+  leading_values.forEach((value: number, index: number): void => {
+    address_as_integer += value * 2 ** (8 * (3 - index));
+  });
+  return address_as_integer;
+}
+
+// Developpe une IPv6 abregee en ses huit groupes de 16 bits.
+function expand_ipv6_groups(address: string): readonly number[] | null {
+  const double_colon_parts: readonly string[] = address.split('::');
+  if (double_colon_parts.length > 2) {
+    return null;
+  }
+
+  const to_groups = (part: string): readonly string[] =>
+    part === '' ? [] : part.split(':');
+
+  const head_groups: readonly string[] = to_groups(double_colon_parts[0]!);
+  const tail_groups: readonly string[] =
+    double_colon_parts.length === 2 ? to_groups(double_colon_parts[1]!) : [];
+
+  const missing_group_count: number =
+    double_colon_parts.length === 2 ? 8 - head_groups.length - tail_groups.length : 0;
+  if (missing_group_count < 0) {
+    return null;
+  }
+
+  const written_groups: readonly string[] = [
+    ...head_groups,
+    ...Array.from({ length: missing_group_count }, (): string => '0'),
+    ...tail_groups,
+  ];
+  if (written_groups.length !== 8) {
+    return null;
+  }
+
+  const groups: number[] = [];
+  for (const written_group of written_groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(written_group)) {
+      return null;
+    }
+    groups.push(Number.parseInt(written_group, 16));
+  }
+  return groups;
+}
+
+function targets_loopback_host(value: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(value).hostname.toLowerCase();
+  } catch {
+    // La forme de l'URL est deja controlee ailleurs : une valeur illisible ici
+    // ne doit pas produire une seconde violation.
+    return false;
+  }
+
+  // `localhost.` avec le point final absolu designe le meme hote.
+  const hostname_without_trailing_dot: string = hostname.replace(/\.$/, '');
+  if (LOOPBACK_HOSTNAMES.includes(hostname_without_trailing_dot)) {
+    return true;
+  }
+
+  // Formes entre crochets. `new URL()` canonicalise l'IPv6 : `[::ffff:127.0.0.1]`
+  // devient `[::ffff:7f00:1]`, donc une comparaison sur l'ecriture d'origine ne
+  // verrait rien. On decide sur les groupes, pas sur la chaine.
+  if (hostname.startsWith('[') && hostname.endsWith(']')) {
+    const groups: readonly number[] | null = expand_ipv6_groups(hostname.slice(1, -1));
+    if (groups === null) {
+      return false;
+    }
+
+    const is_all_zero_prefix: boolean = groups
+      .slice(0, 5)
+      .every((group: number): boolean => group === 0);
+
+    // ::1 (boucle locale) et :: (toutes interfaces).
+    if (is_all_zero_prefix && groups[5] === 0) {
+      return groups[6] === 0 && (groups[7] === 1 || groups[7] === 0);
+    }
+
+    // IPv4 mappee : les 32 derniers bits portent l'adresse IPv4.
+    if (is_all_zero_prefix && groups[5] === 0xffff) {
+      const mapped_address_as_integer: number = groups[6]! * 2 ** 16 + groups[7]!;
+      const first_octet: number = Math.floor(mapped_address_as_integer / 2 ** 24);
+      return first_octet === 127 || mapped_address_as_integer === 0;
+    }
+
+    return false;
+  }
+
+  const address_as_integer: number | null = parse_ipv4_host_as_integer(
+    hostname_without_trailing_dot,
+  );
+  if (address_as_integer === null) {
+    return false;
+  }
+
+  // 127.0.0.0/8 tout entier, et 0.0.0.0 qui designe « toutes les interfaces ».
+  const first_octet: number = Math.floor(address_as_integer / 2 ** 24);
+  return first_octet === 127 || address_as_integer === 0;
+}
+
+// DATABASE_URL contient le mot de passe Postgres en clair. Il n'etait passe
+// qu'au crible de la boucle locale : un POSTGRES_PASSWORD=changeme demarrait en
+// production alors que le meme mot de passe sur MINIO_ROOT_PASSWORD etait
+// refuse.
+function extract_url_password(value: string): string | null {
+  try {
+    const password: string = new URL(value).password;
+    return password === '' ? null : decodeURIComponent(password);
+  } catch {
+    return null;
+  }
+}
+
+function uses_non_deliverable_email_domain(value: string): boolean {
+  const normalized_email: string = value.trim().toLowerCase();
+  return NON_DELIVERABLE_EMAIL_DOMAIN_SUFFIXES.some((suffix: string): boolean =>
+    normalized_email.endsWith(suffix),
+  );
+}
+
 export function parse_application_environment(
   raw_environment: Readonly<Record<string, string | undefined>>,
 ): ApplicationEnvironment {
@@ -110,6 +379,24 @@ export function parse_application_environment(
   const demo_lawyer_password = required_value(
     ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_password,
   );
+  const trusted_proxy_hop_count_raw = required_value(
+    ENVIRONMENT_VARIABLE_NAMES.trusted_proxy_hop_count,
+  );
+
+  let trusted_proxy_hop_count: number | undefined;
+  if (trusted_proxy_hop_count_raw !== undefined) {
+    const parsed_hop_count: number | null = parse_non_negative_integer(
+      trusted_proxy_hop_count_raw,
+    );
+    if (parsed_hop_count === null) {
+      violations.push({
+        variable: ENVIRONMENT_VARIABLE_NAMES.trusted_proxy_hop_count,
+        reason: 'malformed',
+      });
+    } else {
+      trusted_proxy_hop_count = parsed_hop_count;
+    }
+  }
 
   // On ne verifie la forme d'une variable que si elle est bien presente : une
   // variable manquante n'a pas a produire une seconde violation "malformed".
@@ -153,21 +440,143 @@ export function parse_application_environment(
     });
   }
 
+  // Les memes regles que celles appliquees a la creation du compte, appliquees
+  // ici au demarrage. Sans cela un DEMO_LAWYER_PASSWORD de quatre caracteres
+  // passe le demarrage et n'echoue qu'au moment du seed, loin de sa cause — ce
+  // que ce parsing existe precisement pour empecher. La source des bornes est
+  // shared/lawyer_credentials.ts, importee ici comme par le module d'auth :
+  // deux definitions finiraient par diverger.
+  if (demo_lawyer_email !== undefined) {
+    const normalized_demo_lawyer_email: string = normalize_lawyer_email(demo_lawyer_email);
+    if (
+      is_lawyer_email_too_long(normalized_demo_lawyer_email) ||
+      !has_lawyer_email_shape(normalized_demo_lawyer_email)
+    ) {
+      violations.push({
+        variable: ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_email,
+        reason: 'malformed',
+      });
+    }
+  }
+
+  if (
+    demo_lawyer_password !== undefined &&
+    find_lawyer_password_length_violation(demo_lawyer_password) !== null
+  ) {
+    violations.push({
+      variable: ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_password,
+      reason: 'malformed',
+    });
+  }
+
+  // Ces controles ne valent qu'en production : les appliquer partout rendrait le
+  // poste de developpement inutilisable, ou pousserait a les contourner.
+  if (node_environment === 'production') {
+    const secrets_to_screen: ReadonlyArray<readonly [string, string | undefined]> = [
+      [ENVIRONMENT_VARIABLE_NAMES.access_link_token_pepper, access_link_token_pepper],
+      [
+        ENVIRONMENT_VARIABLE_NAMES.internal_storage_webhook_secret,
+        internal_storage_webhook_secret,
+      ],
+      [ENVIRONMENT_VARIABLE_NAMES.minio_root_user, minio_root_user],
+      [ENVIRONMENT_VARIABLE_NAMES.minio_root_password, minio_root_password],
+      [ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_password, demo_lawyer_password],
+    ];
+
+    for (const [variable_name, value] of secrets_to_screen) {
+      if (value !== undefined && contains_forbidden_production_placeholder(value)) {
+        violations.push({
+          variable: variable_name,
+          reason: 'development_value_in_production',
+        });
+      }
+    }
+
+    const endpoints_to_screen: ReadonlyArray<readonly [string, string | undefined]> = [
+      [ENVIRONMENT_VARIABLE_NAMES.database_url, database_url],
+      [ENVIRONMENT_VARIABLE_NAMES.minio_endpoint, minio_endpoint],
+    ];
+
+    for (const [variable_name, value] of endpoints_to_screen) {
+      if (value !== undefined && targets_loopback_host(value)) {
+        violations.push({
+          variable: variable_name,
+          reason: 'development_value_in_production',
+        });
+      }
+    }
+
+    if (database_url !== undefined) {
+      const embedded_password: string | null = extract_url_password(database_url);
+      if (
+        embedded_password !== null &&
+        contains_forbidden_production_placeholder(embedded_password)
+      ) {
+        violations.push({
+          variable: ENVIRONMENT_VARIABLE_NAMES.database_url,
+          reason: 'development_value_in_production',
+        });
+      }
+    }
+
+    if (
+      demo_lawyer_email !== undefined &&
+      uses_non_deliverable_email_domain(demo_lawyer_email)
+    ) {
+      violations.push({
+        variable: ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_email,
+        reason: 'development_value_in_production',
+      });
+    }
+  }
+
   if (violations.length > 0) {
     throw new InvalidEnvironmentError(violations);
   }
 
-  // A ce point, toute violation possible a deja fait sortir la fonction : les
-  // valeurs requises sont necessairement definies.
+  // Aucune assertion de type ici. Un `as string` mentirait au compilateur : le
+  // jour ou une variable serait lue sans etre collectee plus haut, il rendrait
+  // `undefined` sous un type `string`, et la panne surviendrait loin d'ici.
+  // Cette fonction retransforme l'oubli en erreur de demarrage lisible. Le vrai
+  // garde-fou reste le test qui parcourt ENVIRONMENT_VARIABLE_NAMES.
+  function resolved(variable_name: string, value: string | undefined): string {
+    if (value === undefined) {
+      throw new InvalidEnvironmentError([{ variable: variable_name, reason: 'missing' }]);
+    }
+    return value;
+  }
+
+  if (node_environment === undefined) {
+    throw new InvalidEnvironmentError([
+      { variable: ENVIRONMENT_VARIABLE_NAMES.node_environment, reason: 'missing' },
+    ]);
+  }
+
   return {
-    node_environment: node_environment as NodeEnvironment,
-    database_url: database_url as string,
-    access_link_token_pepper: access_link_token_pepper as string,
-    internal_storage_webhook_secret: internal_storage_webhook_secret as string,
-    minio_endpoint: minio_endpoint as string,
-    minio_root_user: minio_root_user as string,
-    minio_root_password: minio_root_password as string,
-    demo_lawyer_email: demo_lawyer_email as string,
-    demo_lawyer_password: demo_lawyer_password as string,
+    node_environment,
+    database_url: resolved(ENVIRONMENT_VARIABLE_NAMES.database_url, database_url),
+    access_link_token_pepper: resolved(
+      ENVIRONMENT_VARIABLE_NAMES.access_link_token_pepper,
+      access_link_token_pepper,
+    ),
+    internal_storage_webhook_secret: resolved(
+      ENVIRONMENT_VARIABLE_NAMES.internal_storage_webhook_secret,
+      internal_storage_webhook_secret,
+    ),
+    minio_endpoint: resolved(ENVIRONMENT_VARIABLE_NAMES.minio_endpoint, minio_endpoint),
+    minio_root_user: resolved(ENVIRONMENT_VARIABLE_NAMES.minio_root_user, minio_root_user),
+    minio_root_password: resolved(
+      ENVIRONMENT_VARIABLE_NAMES.minio_root_password,
+      minio_root_password,
+    ),
+    demo_lawyer_email: resolved(
+      ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_email,
+      demo_lawyer_email,
+    ),
+    demo_lawyer_password: resolved(
+      ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_password,
+      demo_lawyer_password,
+    ),
+    trusted_proxy_hop_count: trusted_proxy_hop_count ?? 0,
   };
 }

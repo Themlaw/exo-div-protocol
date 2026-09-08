@@ -188,3 +188,86 @@ describe('POST /api/auth/sign-in/email', () => {
     }
   });
 });
+
+// [F12] BetterAuth journalise trois messages distincts selon la branche
+// d'echec — "User not found", "Password not found", "Invalid password". La
+// reponse HTTP reste identique, donc le test [9] passe, mais les journaux
+// disent lequel des trois cas s'est produit. memories/observabilite.md prevoit
+// une collecte de logs : un oracle d'enumeration y serait ecrit a chaque
+// tentative, et il survivrait a l'egalite mesuree cote HTTP.
+describe("[F12] les journaux ne disent pas si le compte existe", () => {
+  let integration_test_application: IntegrationTestApplication | undefined;
+  let app: INestApplication;
+  let captured_log_lines: string[];
+  let restore_console: () => void;
+  let demo_lawyer_email: string;
+
+  beforeAll(async () => {
+    demo_lawyer_email = require_env('DEMO_LAWYER_EMAIL');
+    integration_test_application = await create_integration_test_application();
+    app = integration_test_application.app;
+  });
+
+  afterAll(async () => {
+    await close_integration_test_application(integration_test_application);
+  });
+
+  beforeEach(() => {
+    captured_log_lines = [];
+    const original_methods = {
+      log: console.log,
+      warn: console.warn,
+      error: console.error,
+      info: console.info,
+      debug: console.debug,
+    } as const;
+
+    const capture = (...parts: readonly unknown[]): void => {
+      captured_log_lines.push(parts.map((part: unknown): string => String(part)).join(' '));
+    };
+
+    console.log = capture;
+    console.warn = capture;
+    console.error = capture;
+    console.info = capture;
+    console.debug = capture;
+
+    restore_console = (): void => {
+      console.log = original_methods.log;
+      console.warn = original_methods.warn;
+      console.error = original_methods.error;
+      console.info = original_methods.info;
+      console.debug = original_methods.debug;
+    };
+  });
+
+  afterEach(() => {
+    restore_console();
+  });
+
+  const ENUMERATION_REVEALING_MESSAGES: readonly string[] = [
+    'User not found',
+    'Password not found',
+    'Invalid password',
+  ];
+
+  it.each([
+    ['un compte inexistant', `inconnu-${randomUUID()}@example.test`],
+    ['le compte de demonstration avec un mauvais mot de passe', undefined],
+  ])(
+    'une tentative sur %s n ecrit aucun message revelant la branche d echec',
+    async (_label: string, email_override: string | undefined) => {
+      await request(app.getHttpServer())
+        .post(LAWYER_AUTH_ROUTE_PATHS.sign_in)
+        .send({
+          email: email_override ?? demo_lawyer_email,
+          password: 'ce-mot-de-passe-est-volontairement-faux',
+        });
+
+      const captured_output = captured_log_lines.join('\n');
+      for (const revealing_message of ENUMERATION_REVEALING_MESSAGES) {
+        expect(captured_output).not.toContain(revealing_message);
+      }
+    },
+  );
+});

@@ -1,4 +1,15 @@
-import { index, inet, integer, pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+  check,
+  index,
+  inet,
+  integer,
+  pgSchema,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
+import { MAXIMUM_LAWYER_EMAIL_LENGTH } from '../../shared/lawyer_credentials';
 
 export const security_schema = pgSchema('security');
 
@@ -66,4 +77,34 @@ export const lawyer_login_failure_by_account = security_schema.table(
       .notNull()
       .defaultNow(),
   },
+  (table) => [
+    // Ici la normalisation n'est pas une question de proprete : une casse non
+    // rabattue donnerait un compteur distinct par variante, donc un
+    // contournement pur et simple du backoff — il suffirait d'alterner
+    // `demo@x.fr` et `Demo@x.fr`. Le code appelle normalize_lawyer_email avant
+    // d'ecrire, mais un seul appelant qui l'oublie rouvrirait la faille en
+    // silence, puisque la ligne s'insererait normalement.
+    //
+    // La borne de longueur compte autant : cette clef primaire recoit des
+    // chaines entierement choisies par l'attaquant, puisqu'on compte aussi les
+    // tentatives sur des comptes inexistants.
+    // `btrim(x)` a un argument ne retire QUE l'espace U+0020, la ou
+    // String.prototype.trim() en retire treize. Mesure lors de la revue :
+    // tabulation, saut de ligne, espace insecable, marque d'ordre des octets et
+    // huit autres passaient la contrainte — soit douze compteurs distincts pour
+    // un meme compte, donc le contournement du backoff que cette contrainte
+    // existe pour interdire. On exige donc la forme complete de l'adresse,
+    // exactement comme has_lawyer_email_shape le fait cote code.
+    check(
+      'lawyer_login_failure_by_account_email_is_normalized',
+      sql`${table.email} = lower(${table.email})
+        AND ${table.email} ~ '^[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+@[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+\\.[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+$'
+        AND length(${table.email}) <= ${sql.raw(String(MAXIMUM_LAWYER_EMAIL_LENGTH))}`,
+    ),
+    // Un ON CONFLICT DO UPDATE mal ecrit produirait un delai nul en silence.
+    check(
+      'lawyer_login_failure_by_account_attempts_is_not_negative',
+      sql`${table.consecutive_failed_attempts} >= 0`,
+    ),
+  ],
 );

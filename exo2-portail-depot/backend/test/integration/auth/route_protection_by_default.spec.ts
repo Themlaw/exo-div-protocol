@@ -34,7 +34,14 @@ const NON_LAWYER_ROUTE_WHITELIST: ReadonlyArray<
   (declaration) => declaration.path === METRICS_PATH,
   (declaration) =>
     declaration.http_method === 'POST' && declaration.path === INTERNAL_STORAGE_EVENTS_PATH,
-  (declaration) => declaration.path.startsWith('/public/'),
+  // [F6] Chemins EXACTS, jamais un prefixe. `startsWith('/public/')`
+  // pre-approuvait toute route future sous /public/ — exactement le geste
+  // implicite que ce test pretend interdire. Ajouter une route ouverte doit
+  // rester un ajout relu, ligne par ligne.
+  (declaration) =>
+    declaration.http_method === 'GET' && declaration.path === '/public/:token',
+  (declaration) =>
+    declaration.http_method === 'POST' && declaration.path === '/public/:token/unlock',
 ];
 
 const VALID_ROUTE_ACCESS_KINDS: readonly RouteAccessKind[] = [
@@ -125,5 +132,51 @@ describe('Protection des routes par defaut', () => {
     const unique_pairs = new Set(method_and_path_pairs);
 
     expect(unique_pairs.size).toBe(method_and_path_pairs.length);
+  });
+});
+
+// [F6] BetterAuth se monte comme handler Node brut sous /api/auth/*, PAS comme
+// controleur Nest : ses routes n'apparaissent pas dans le routeur Nest, donc
+// ni dans collect_route_access_declarations, ni sous un APP_GUARD global. Le
+// defaut protecteur ne s'y applique pas, et l'outil cense le prouver ne voit
+// rien. C'est le cas « route generee par une bibliotheque » de la revue.
+describe("[F6] la surface d'authentification echappe au recensement du routeur Nest", () => {
+  let integration_test_application: IntegrationTestApplication | undefined;
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    integration_test_application = await create_integration_test_application();
+    app = integration_test_application.app;
+  });
+
+  afterAll(async () => {
+    await close_integration_test_application(integration_test_application);
+  });
+
+  it.each([
+    ['sign_in', LAWYER_AUTH_ROUTE_PATHS.sign_in],
+    ['sign_out', LAWYER_AUTH_ROUTE_PATHS.sign_out],
+    ['session', LAWYER_AUTH_ROUTE_PATHS.session],
+  ])('la route %s de BetterAuth est declaree au recensement', (_label: string, path: string) => {
+    const declarations = collect_route_access_declarations(app);
+
+    expect(declarations.map((declaration) => declaration.path)).toContain(path);
+  });
+
+  it("les routes d'authentification sont declarees comme ouvertes, explicitement et non par omission", () => {
+    const declarations = collect_route_access_declarations(app);
+    const sign_in_declaration = declarations.find(
+      (declaration) => declaration.path === LAWYER_AUTH_ROUTE_PATHS.sign_in,
+    );
+
+    // Se connecter ne peut pas exiger d'etre connecte : cette route est
+    // forcement ouverte. Ce qui compte est qu'elle le soit par une declaration
+    // visible, pas parce qu'elle a echappe au garde.
+    expect(sign_in_declaration).toBeDefined();
+    expect(sign_in_declaration?.access_kind).not.toBe('lawyer');
+  });
+
+  it("une requete sans session sur une route avocat quelconque reste refusee : le garde s'applique bien au-dela du routeur Nest", async () => {
+    await request(app.getHttpServer()).get('/api/requests').expect(401);
   });
 });

@@ -1,24 +1,31 @@
 import {
+  LAWYER_PASSWORD_LENGTH_BOUNDS,
+  MAXIMUM_LAWYER_EMAIL_LENGTH,
+} from '../../../src/shared/lawyer_credentials';
+import {
   parse_application_environment,
   InvalidEnvironmentError,
   MINIMUM_ACCESS_LINK_TOKEN_PEPPER_LENGTH,
   MINIMUM_INTERNAL_STORAGE_WEBHOOK_SECRET_LENGTH,
   REQUIRED_ENVIRONMENT_VARIABLES,
+  FORBIDDEN_PRODUCTION_PLACEHOLDER_FRAGMENTS,
+  MINIO_DEFAULT_ROOT_CREDENTIAL,
   type ApplicationEnvironment,
 } from '../../../src/config/environment';
 
 const VALID_RAW_ENVIRONMENT: Readonly<Record<string, string>> = {
   NODE_ENV: 'production',
-  DATABASE_URL: 'postgres://portail:secret@localhost:5432/portail',
+  DATABASE_URL: 'postgres://portail:mot-de-passe-genere@postgres:5432/portail',
   ACCESS_LINK_TOKEN_PEPPER: 'p'.repeat(MINIMUM_ACCESS_LINK_TOKEN_PEPPER_LENGTH),
   INTERNAL_STORAGE_WEBHOOK_SECRET: 's'.repeat(
     MINIMUM_INTERNAL_STORAGE_WEBHOOK_SECRET_LENGTH,
   ),
   MINIO_ENDPOINT: 'http://minio:9000',
-  MINIO_ROOT_USER: 'minio-root-user',
-  MINIO_ROOT_PASSWORD: 'minio-root-password-value',
-  DEMO_LAWYER_EMAIL: 'demo@example.test',
-  DEMO_LAWYER_PASSWORD: 'demo-lawyer-password-value',
+  MINIO_ROOT_USER: 'portail-minio-root',
+  MINIO_ROOT_PASSWORD: 'f'.repeat(64),
+  DEMO_LAWYER_EMAIL: 'avocat@cabinet-demonstration.fr',
+  TRUSTED_PROXY_HOP_COUNT: '1',
+  DEMO_LAWYER_PASSWORD: 'cheval batterie agrafe correct girafe',
 };
 
 function raw_environment_without(
@@ -49,6 +56,7 @@ describe('parse_application_environment', () => {
       minio_root_user: VALID_RAW_ENVIRONMENT.MINIO_ROOT_USER,
       minio_root_password: VALID_RAW_ENVIRONMENT.MINIO_ROOT_PASSWORD,
       demo_lawyer_email: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_EMAIL,
+      trusted_proxy_hop_count: 1,
       demo_lawyer_password: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_PASSWORD,
     });
   });
@@ -161,7 +169,7 @@ describe('parse_application_environment', () => {
   it("une database_url qui n'est pas une URL postgres produit une violation malformed", () => {
     const raw_environment: Readonly<Record<string, string | undefined>> = {
       ...VALID_RAW_ENVIRONMENT,
-      DATABASE_URL: 'http://localhost:5432/portail',
+      DATABASE_URL: 'http://postgres:5432/portail',
     };
 
     try {
@@ -189,6 +197,326 @@ describe('parse_application_environment', () => {
       expect(message).not.toContain(VALID_RAW_ENVIRONMENT.MINIO_ROOT_PASSWORD);
       expect(message).not.toContain(VALID_RAW_ENVIRONMENT.ACCESS_LINK_TOKEN_PEPPER);
     }
+  });
+});
+
+function violations_of(
+  raw_environment: Readonly<Record<string, string | undefined>>,
+): readonly { variable: string; reason: string }[] {
+  try {
+    parse_application_environment(raw_environment);
+    throw new Error('parse_application_environment aurait du lever');
+  } catch (error: unknown) {
+    expect(error).toBeInstanceOf(InvalidEnvironmentError);
+    return (error as InvalidEnvironmentError).violations;
+  }
+}
+
+function raw_environment_with(
+  overrides: Readonly<Record<string, string>>,
+): Readonly<Record<string, string | undefined>> {
+  return { ...VALID_RAW_ENVIRONMENT, ...overrides };
+}
+
+// Une valeur de developpement qui atteint la production est un secret que tout
+// le monde connait. Ces controles ne se declenchent qu'en production : les
+// appliquer partout rendrait le poste de developpement inutilisable.
+describe('valeurs de developpement interdites en production', () => {
+  it("[c] minioadmin, l'identifiant par defaut documente de MinIO, est refuse sur MINIO_ROOT_USER", () => {
+    expect(
+      violations_of(raw_environment_with({ MINIO_ROOT_USER: MINIO_DEFAULT_ROOT_CREDENTIAL })),
+    ).toContainEqual({
+      variable: 'MINIO_ROOT_USER',
+      reason: 'development_value_in_production',
+    });
+  });
+
+  it('[c] minioadmin est egalement refuse sur MINIO_ROOT_PASSWORD', () => {
+    expect(
+      violations_of(raw_environment_with({ MINIO_ROOT_PASSWORD: MINIO_DEFAULT_ROOT_CREDENTIAL })),
+    ).toContainEqual({
+      variable: 'MINIO_ROOT_PASSWORD',
+      reason: 'development_value_in_production',
+    });
+  });
+
+  // Chaque fragment est teste NOYE dans une valeur par ailleurs credible : c'est
+  // le contournement reel — personne n'ecrit `changeme`, on ecrit `changeme1`.
+  it.each(FORBIDDEN_PRODUCTION_PLACEHOLDER_FRAGMENTS)(
+    '[d] le fragment %s est refuse meme noye dans une valeur plus longue',
+    (fragment: string) => {
+      expect(
+        violations_of(
+          raw_environment_with({ DEMO_LAWYER_PASSWORD: `prefixe-${fragment}-2026-suffixe` }),
+        ),
+      ).toContainEqual({
+        variable: 'DEMO_LAWYER_PASSWORD',
+        reason: 'development_value_in_production',
+      });
+    },
+  );
+
+  it('[d] la comparaison est insensible a la casse et aux espaces : ChangeMe est aussi mauvais que changeme', () => {
+    expect(
+      violations_of(raw_environment_with({ MINIO_ROOT_PASSWORD: '  ChangeMe-2026  ' })),
+    ).toContainEqual({
+      variable: 'MINIO_ROOT_PASSWORD',
+      reason: 'development_value_in_production',
+    });
+  });
+
+  it.each([
+    'demo@example.test',
+    'demo@example.com',
+    'demo@cabinet.local',
+    'demo@cabinet.invalid',
+  ])('[e] un email de demonstration en %s est refuse', (email: string) => {
+    expect(violations_of(raw_environment_with({ DEMO_LAWYER_EMAIL: email }))).toContainEqual({
+      variable: 'DEMO_LAWYER_EMAIL',
+      reason: 'development_value_in_production',
+    });
+  });
+
+  // En production, ces adresses sont des noms de service Docker. Un localhost
+  // trahit un .env de developpement recopie tel quel.
+  it.each([
+    ['DATABASE_URL', 'postgres://portail:secret@localhost:5432/portail'],
+    ['DATABASE_URL', 'postgres://portail:secret@127.0.0.1:5432/portail'],
+    ['MINIO_ENDPOINT', 'http://localhost:9000'],
+    ['MINIO_ENDPOINT', 'http://127.0.0.1:9000'],
+  ])('[f] %s pointant sur %s est refuse', (variable: string, value: string) => {
+    expect(violations_of(raw_environment_with({ [variable]: value }))).toContainEqual({
+      variable,
+      reason: 'development_value_in_production',
+    });
+  });
+
+  it("[g] hors production, aucun de ces controles ne se declenche : le poste de developpement doit rester utilisable", () => {
+    const development_environment: Readonly<Record<string, string | undefined>> =
+      raw_environment_with({
+        NODE_ENV: 'development',
+        DATABASE_URL: 'postgres://portail:portail@localhost:5432/portail',
+        MINIO_ENDPOINT: 'http://localhost:9000',
+        MINIO_ROOT_USER: MINIO_DEFAULT_ROOT_CREDENTIAL,
+        MINIO_ROOT_PASSWORD: MINIO_DEFAULT_ROOT_CREDENTIAL,
+        DEMO_LAWYER_EMAIL: 'demo@example.test',
+        DEMO_LAWYER_PASSWORD: 'changeme-en-developpement',
+      });
+
+    expect(() => parse_application_environment(development_environment)).not.toThrow();
+  });
+
+  it("[h] la violation nomme la variable et la raison, jamais la valeur fautive", () => {
+    const forbidden_value = MINIO_DEFAULT_ROOT_CREDENTIAL;
+    const raw_environment = raw_environment_with({ MINIO_ROOT_PASSWORD: forbidden_value });
+
+    try {
+      parse_application_environment(raw_environment);
+      throw new Error('parse_application_environment aurait du lever');
+    } catch (error: unknown) {
+      const invalid_environment_error = error as InvalidEnvironmentError;
+      expect(invalid_environment_error.message).not.toContain(forbidden_value);
+      expect(JSON.stringify(invalid_environment_error.violations)).not.toContain(forbidden_value);
+    }
+  });
+});
+
+// Sans ces controles au demarrage, un DEMO_LAWYER_PASSWORD de quatre caracteres
+// passait le parsing et n'echouait qu'au moment du seed, loin de sa cause.
+describe('les regles sur les identifiants avocat sont appliquees des le demarrage', () => {
+  it.each([
+    ['trop court d un caractere', 'a'.repeat(LAWYER_PASSWORD_LENGTH_BOUNDS.min - 1)],
+    ['trop long d un caractere', 'a'.repeat(LAWYER_PASSWORD_LENGTH_BOUNDS.max + 1)],
+  ])('un DEMO_LAWYER_PASSWORD %s produit une violation malformed', (_label: string, value: string) => {
+    expect(violations_of(raw_environment_with({ DEMO_LAWYER_PASSWORD: value }))).toContainEqual({
+      variable: 'DEMO_LAWYER_PASSWORD',
+      reason: 'malformed',
+    });
+  });
+
+  it.each([
+    ['sans arobase', 'avocat.cabinet.fr'],
+    ['sans domaine pointe', 'avocat@cabinet'],
+    ['plus long que la borne', `${'a'.repeat(MAXIMUM_LAWYER_EMAIL_LENGTH)}@cabinet.fr`],
+  ])('un DEMO_LAWYER_EMAIL %s produit une violation malformed', (_label: string, value: string) => {
+    expect(violations_of(raw_environment_with({ DEMO_LAWYER_EMAIL: value }))).toContainEqual({
+      variable: 'DEMO_LAWYER_EMAIL',
+      reason: 'malformed',
+    });
+  });
+
+  // Le point de la source unique : si quelqu'un change la borne d'un cote sans
+  // l'autre, ce test ne le verra pas — mais il n'y a plus deux cotes.
+  it('les bornes appliquees ici sont exactement celles de shared/lawyer_credentials', () => {
+    const exactly_minimum: string = 'a'.repeat(LAWYER_PASSWORD_LENGTH_BOUNDS.min);
+    const exactly_maximum: string = 'a'.repeat(LAWYER_PASSWORD_LENGTH_BOUNDS.max);
+
+    expect(() =>
+      parse_application_environment(
+        raw_environment_with({ DEMO_LAWYER_PASSWORD: exactly_minimum }),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      parse_application_environment(
+        raw_environment_with({ DEMO_LAWYER_PASSWORD: exactly_maximum }),
+      ),
+    ).not.toThrow();
+  });
+});
+
+// Les 32 caracteres precedents valaient 128 bits pour un poivre genere en
+// hexadecimal, alors qu'une clef HMAC-SHA256 merite la taille de sortie du
+// hache, soit 32 octets — donc 64 caracteres hex.
+describe('longueur des secrets', () => {
+  it.each([
+    ['ACCESS_LINK_TOKEN_PEPPER', MINIMUM_ACCESS_LINK_TOKEN_PEPPER_LENGTH],
+    ['INTERNAL_STORAGE_WEBHOOK_SECRET', MINIMUM_INTERNAL_STORAGE_WEBHOOK_SECRET_LENGTH],
+  ])('%s exige au moins 64 caracteres hexadecimaux, soit 32 octets', (variable: string, minimum: number) => {
+    expect(minimum).toBe(64);
+
+    expect(
+      violations_of(raw_environment_with({ [variable]: 'a'.repeat(minimum - 1) })),
+    ).toContainEqual({ variable, reason: 'malformed' });
+
+    expect(() =>
+      parse_application_environment(raw_environment_with({ [variable]: 'a'.repeat(minimum) })),
+    ).not.toThrow();
+  });
+});
+
+// La revue de securite a montre que ce parametre — le plus sensible de la
+// limitation par adresse — n'etait lu de NULLE PART, alors que
+// parse_application_environment existe pour qu'aucune configuration dangereuse
+// ne demarre. Un NaN faisait lever une TypeError sur chaque tentative de
+// connexion, soit un deni de service total du login.
+describe('[F4] TRUSTED_PROXY_HOP_COUNT est une variable a part entiere', () => {
+  it.each([
+    ['une valeur non numerique', 'abc'],
+    ['un nombre fractionnaire', '1.5'],
+    ['un nombre negatif', '-1'],
+    ['une notation exponentielle', '1e3'],
+    ['un espace', ' '],
+    ['une valeur hexadecimale', '0x1'],
+    ['Infinity', 'Infinity'],
+    ['NaN', 'NaN'],
+  ])('%s produit une violation malformed', (_label: string, value: string) => {
+    expect(violations_of(raw_environment_with({ TRUSTED_PROXY_HOP_COUNT: value }))).toContainEqual({
+      variable: 'TRUSTED_PROXY_HOP_COUNT',
+      reason: 'malformed',
+    });
+  });
+
+  // Zero est LEGITIME et doit passer : c'est le mode degrade de la VM
+  // d'exercice, ou le passthrough SNI empeche le proxy frontal d'ajouter un
+  // X-Forwarded-For. Le refuser forcerait a mentir sur la configuration.
+  it.each(['0', '1', '2'])('%s est accepte', (value: string) => {
+    expect(() =>
+      parse_application_environment(raw_environment_with({ TRUSTED_PROXY_HOP_COUNT: value })),
+    ).not.toThrow();
+  });
+
+  it('la valeur est rendue comme un nombre, pas comme une chaine', () => {
+    const parsed = parse_application_environment(
+      raw_environment_with({ TRUSTED_PROXY_HOP_COUNT: '2' }),
+    );
+
+    expect(parsed.trusted_proxy_hop_count).toBe(2);
+  });
+});
+
+// Mesure lors de la revue : `postgres:` n'etant pas un schema « special » au
+// sens WHATWG, `new URL()` ne canonicalise pas l'hote IPv4. Le controle
+// n'attrapait donc que l'ecriture la plus naive de la boucle locale.
+describe('[F7] les ecritures alternatives de la boucle locale sont refusees en production', () => {
+  it.each([
+    ['forme courte', 'postgres://portail:mdp@127.1:5432/portail'],
+    ['entier 32 bits', 'postgres://portail:mdp@2130706433:5432/portail'],
+    ['octal', 'postgres://portail:mdp@0177.0.0.1:5432/portail'],
+    ['point final', 'postgres://portail:mdp@localhost.:5432/portail'],
+    ['IPv4 mappee', 'postgres://portail:mdp@[::ffff:127.0.0.1]:5432/portail'],
+    ['adresse nulle', 'postgres://portail:mdp@0.0.0.0:5432/portail'],
+    ['autre adresse de la boucle', 'postgres://portail:mdp@127.0.0.2:5432/portail'],
+  ])('DATABASE_URL en %s est refuse', (_label: string, value: string) => {
+    expect(violations_of(raw_environment_with({ DATABASE_URL: value }))).toContainEqual({
+      variable: 'DATABASE_URL',
+      reason: 'development_value_in_production',
+    });
+  });
+
+  it.each([
+    ['forme courte', 'http://127.1:9000'],
+    ['entier 32 bits', 'http://2130706433:9000'],
+    ['point final', 'http://localhost.:9000'],
+    ['IPv4 mappee', 'http://[::ffff:127.0.0.1]:9000'],
+    ['adresse nulle', 'http://0.0.0.0:9000'],
+  ])('MINIO_ENDPOINT en %s est refuse', (_label: string, value: string) => {
+    expect(violations_of(raw_environment_with({ MINIO_ENDPOINT: value }))).toContainEqual({
+      variable: 'MINIO_ENDPOINT',
+      reason: 'development_value_in_production',
+    });
+  });
+
+  it('un nom de service Docker reste accepte : c est la configuration nominale', () => {
+    expect(() =>
+      parse_application_environment(
+        raw_environment_with({
+          DATABASE_URL: 'postgres://portail:mdp@postgres:5432/portail',
+          MINIO_ENDPOINT: 'http://minio:9000',
+        }),
+      ),
+    ).not.toThrow();
+  });
+});
+
+// DATABASE_URL contient POSTGRES_PASSWORD en clair. Il n'etait passe qu'au
+// crible de la boucle locale, jamais a celui des valeurs bidon : un
+// POSTGRES_PASSWORD=changeme demarrait en production alors que le meme mot de
+// passe sur MINIO_ROOT_PASSWORD etait refuse.
+describe('[F8] le mot de passe contenu dans DATABASE_URL est passe au crible', () => {
+  it.each(['changeme', 'password2026', 'motdepasse', 'secret-42'])(
+    'un mot de passe Postgres %s est refuse en production',
+    (postgres_password: string) => {
+      expect(
+        violations_of(
+          raw_environment_with({
+            DATABASE_URL: `postgres://portail:${postgres_password}@postgres:5432/portail`,
+          }),
+        ),
+      ).toContainEqual({
+        variable: 'DATABASE_URL',
+        reason: 'development_value_in_production',
+      });
+    },
+  );
+
+  it("le mot de passe ne se retrouve jamais dans le message d'erreur", () => {
+    const postgres_password = 'changeme-tres-reconnaissable';
+
+    try {
+      parse_application_environment(
+        raw_environment_with({
+          DATABASE_URL: `postgres://portail:${postgres_password}@postgres:5432/portail`,
+        }),
+      );
+      throw new Error('parse_application_environment aurait du lever');
+    } catch (error: unknown) {
+      const invalid_environment_error = error as InvalidEnvironmentError;
+      expect(invalid_environment_error.message).not.toContain(postgres_password);
+      expect(JSON.stringify(invalid_environment_error.violations)).not.toContain(
+        postgres_password,
+      );
+    }
+  });
+
+  it('hors production, un mot de passe Postgres faible reste accepte', () => {
+    expect(() =>
+      parse_application_environment(
+        raw_environment_with({
+          NODE_ENV: 'development',
+          DATABASE_URL: 'postgres://portail:changeme@localhost:5432/portail',
+        }),
+      ),
+    ).not.toThrow();
   });
 });
 

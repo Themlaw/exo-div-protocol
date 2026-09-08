@@ -8,6 +8,7 @@ import {
 } from '../../helpers/integration_application';
 import {
   LOGIN_BACKOFF_BOUNDS,
+  LOGIN_FAILURE_DECAY_SECONDS,
   LOGIN_IP_RATE_LIMIT_BOUNDS,
 } from '../../../src/auth/login_throttling';
 import { LAWYER_AUTH_ROUTE_PATHS } from '../../../src/auth/auth_http_contract';
@@ -350,5 +351,203 @@ describe('rate limiting sur la connexion avocat', () => {
 
       expect(successful_attempt_response.status).toBe(200);
     });
+  });
+});
+
+// Tests issus de la revue de securite du 2026-09-08. Chacun rejoue une faille
+// au niveau HTTP, la ou les tests precedents ne l'auraient pas vue.
+describe('[F1] le pilonnage d un compte ne doit pas fermer ce compte', () => {
+  let integration_test_application: IntegrationTestApplication | undefined;
+  let app: INestApplication;
+
+  const ATTACKER_ADDRESS = '203.0.113.66';
+  const LAWYER_ADDRESS = '198.51.100.12';
+
+  beforeAll(async () => {
+    integration_test_application = await create_integration_test_application();
+    app = integration_test_application.app;
+  });
+
+  afterAll(async () => {
+    await close_integration_test_application(integration_test_application);
+  });
+
+  it("un attaquant qui pilonne depuis son adresse ne verrouille pas l'avocat qui se connecte depuis la sienne", async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await attempt_login(app, wrong_password_attempt(VALID_LAWYER_EMAIL), {
+        'x-forwarded-for': ATTACKER_ADDRESS,
+      });
+    }
+
+    const lawyer_response = await attempt_login(
+      app,
+      { email: VALID_LAWYER_EMAIL, password: VALID_LAWYER_PASSWORD },
+      { 'x-forwarded-for': LAWYER_ADDRESS },
+    );
+
+    expect(lawyer_response.status).toBe(200);
+  });
+
+  it("meme depuis l'adresse pilonnee, des identifiants corrects finissent par passer : la couche par compte retarde, elle ne ferme pas", async () => {
+    const clock = build_mutable_test_clock(new Date('2026-03-12T10:00:00.000Z'));
+    const application_with_clock = await create_integration_test_application({ clock });
+
+    try {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await attempt_login(
+          application_with_clock.app,
+          wrong_password_attempt(VALID_LAWYER_EMAIL),
+          { 'x-forwarded-for': ATTACKER_ADDRESS },
+        );
+      }
+
+      // Le temps passe sans nouvelle tentative : les compteurs decroissent.
+      clock.advance_seconds(LOGIN_FAILURE_DECAY_SECONDS + 1);
+
+      const response = await attempt_login(
+        application_with_clock.app,
+        { email: VALID_LAWYER_EMAIL, password: VALID_LAWYER_PASSWORD },
+        { 'x-forwarded-for': ATTACKER_ADDRESS },
+      );
+
+      expect(response.status).toBe(200);
+    } finally {
+      await close_integration_test_application(application_with_clock);
+    }
+  });
+});
+
+describe('[F2] un email demesure ne doit ni coûter un Argon2 gratuit, ni echapper au comptage', () => {
+  let integration_test_application: IntegrationTestApplication | undefined;
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    integration_test_application = await create_integration_test_application();
+    app = integration_test_application.app;
+  });
+
+  afterAll(async () => {
+    await close_integration_test_application(integration_test_application);
+  });
+
+  const OVERSIZED_EMAIL = `${'a'.repeat(100_000)}@example.test`;
+
+  it("un email de 100 000 caracteres est rejete sans erreur 500 : sinon l'INSERT du compteur viole le CHECK", async () => {
+    const response = await attempt_login(app, {
+      email: OVERSIZED_EMAIL,
+      password: 'peu-importe-le-mot-de-passe',
+    });
+
+    expect(response.status).toBeLessThan(500);
+  });
+
+  it("un email demesure ne declenche AUCUN hachage : sinon l'attaquant fait payer un Argon2 par requete", async () => {
+    const calls_before = integration_test_application!.password_hashing_call_count();
+
+    await attempt_login(app, {
+      email: OVERSIZED_EMAIL,
+      password: 'peu-importe-le-mot-de-passe',
+    });
+
+    expect(integration_test_application!.password_hashing_call_count()).toBe(calls_before);
+  });
+
+  it.each([
+    ['un email sans arobase', 'pas-une-adresse'],
+    ['un email avec un espace', 'de mo@example.test'],
+    ['un email vide', ''],
+  ])('%s est rejete sans erreur 500', async (_label: string, email: string) => {
+    const response = await attempt_login(app, { email, password: 'peu-importe' });
+
+    expect(response.status).toBeLessThan(500);
+  });
+});
+
+describe('[F3] les variantes de casse et d espaces partagent un seul compteur', () => {
+  let integration_test_application: IntegrationTestApplication | undefined;
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    integration_test_application = await create_integration_test_application();
+    app = integration_test_application.app;
+  });
+
+  afterAll(async () => {
+    await close_integration_test_application(integration_test_application);
+  });
+
+  it("alterner la casse ne rend pas un budget de tentatives neuf", async () => {
+    const case_variants: readonly string[] = [
+      VALID_LAWYER_EMAIL,
+      VALID_LAWYER_EMAIL.toUpperCase(),
+      `  ${VALID_LAWYER_EMAIL}  `,
+      VALID_LAWYER_EMAIL.replace('@', '@'),
+    ];
+
+    let last_response: request.Response | undefined;
+    for (let round = 0; round < 6; round += 1) {
+      for (const email_variant of case_variants) {
+        last_response = await attempt_login(app, wrong_password_attempt(email_variant), {
+          'x-forwarded-for': '203.0.113.77',
+        });
+      }
+    }
+
+    expect(last_response).toBeDefined();
+    expect(was_slowed_or_refused(last_response!)).toBe(true);
+  });
+});
+
+// [F10] Le test [18] acceptait la simple presence d'un en-tete Retry-After :
+// une implementation qui renvoie `Retry-After: 0` partout le passait sans
+// ralentir quoi que ce soit.
+describe('[F10] le ralentissement doit etre observable, pas seulement annonce', () => {
+  let integration_test_application: IntegrationTestApplication | undefined;
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    integration_test_application = await create_integration_test_application();
+    app = integration_test_application.app;
+  });
+
+  afterAll(async () => {
+    await close_integration_test_application(integration_test_application);
+  });
+
+  it('le delai annonce croit avec les echecs, et n est jamais nul une fois le seuil franchi', async () => {
+    const announced_delays: number[] = [];
+    const targeted_address = '203.0.113.88';
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const response = await attempt_login(app, wrong_password_attempt(VALID_LAWYER_EMAIL), {
+        'x-forwarded-for': targeted_address,
+      });
+      const retry_after = response.headers['retry-after'];
+      if (retry_after !== undefined) {
+        announced_delays.push(Number(retry_after));
+      }
+    }
+
+    expect(announced_delays.length).toBeGreaterThan(0);
+    for (const delay of announced_delays) {
+      expect(delay).toBeGreaterThan(0);
+    }
+    expect(announced_delays[announced_delays.length - 1]).toBeGreaterThan(announced_delays[0]!);
+  });
+
+  it('le delai reste borne par le plafond : un ralentissement infini serait un refus deguise', async () => {
+    const targeted_address = '203.0.113.99';
+    let last_retry_after: string | undefined;
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const response = await attempt_login(app, wrong_password_attempt(VALID_LAWYER_EMAIL), {
+        'x-forwarded-for': targeted_address,
+      });
+      last_retry_after = response.headers['retry-after'] ?? last_retry_after;
+    }
+
+    expect(Number(last_retry_after)).toBeLessThanOrEqual(
+      LOGIN_BACKOFF_BOUNDS.max_delay_seconds,
+    );
   });
 });

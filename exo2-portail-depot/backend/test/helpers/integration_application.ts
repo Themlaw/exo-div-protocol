@@ -1,6 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import { NotImplementedError } from '../../src/domain/not_implemented';
-import type { RouteAccessKind } from '../../src/auth/route_access';
+import { DiscoveryService } from '@nestjs/core';
+import { collect_route_access_inventory } from '../../src/auth/route_access_inventory';
+import type { RouteAccessDeclaration } from '../../src/auth/route_access';
 import type { Clock } from '../../src/shared/clock';
 
 export interface IntegrationTestApplication {
@@ -49,8 +51,21 @@ export interface MutableTestClock extends Clock {
   set(now: Date): void;
 }
 
-export function build_mutable_test_clock(_initial_now: Date): MutableTestClock {
-  throw new NotImplementedError('build_mutable_test_clock');
+export function build_mutable_test_clock(initial_now: Date): MutableTestClock {
+  // Copiee, jamais gardee par reference : une `Date` est mutable, et un test
+  // qui modifierait la sienne apres coup deplacerait l'horloge de
+  // l'application sans le dire.
+  let current_now: Date = new Date(initial_now.getTime());
+
+  return {
+    now: (): Date => new Date(current_now.getTime()),
+    advance_seconds: (seconds: number): void => {
+      current_now = new Date(current_now.getTime() + seconds * 1000);
+    },
+    set: (now: Date): void => {
+      current_now = new Date(now.getTime());
+    },
+  };
 }
 
 export interface IntegrationTestApplicationOptions {
@@ -63,17 +78,13 @@ export function create_integration_test_application(
   throw new NotImplementedError('create_integration_test_application');
 }
 
-export interface RouteAccessDeclaration {
-  http_method: string;
-  path: string;
-  access_kind: RouteAccessKind;
-}
-
 // Permet au test structurel de verifier les routes qu'on n'a PAS encore ecrites :
 // c'est lui qui fera echouer la CI le jour ou quelqu'un ajoutera une route sans
 // se demander qui a le droit de l'appeler.
 export function collect_route_access_declarations(
-  _app: INestApplication,
+  app: INestApplication,
 ): readonly RouteAccessDeclaration[] {
-  throw new NotImplementedError('collect_route_access_declarations');
+  return collect_route_access_inventory(app.get(DiscoveryService, { strict: false }));
 }
+
+export type { RouteAccessDeclaration };

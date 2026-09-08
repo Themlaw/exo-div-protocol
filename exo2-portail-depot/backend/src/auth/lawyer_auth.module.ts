@@ -1,0 +1,108 @@
+import { Global, Inject, Injectable, Module, type OnModuleInit } from '@nestjs/common';
+import { APPLICATION_ENVIRONMENT } from '../config/configuration.module';
+import type { ApplicationEnvironment } from '../config/environment';
+import { APPLICATION_DATABASE } from '../db/database.module';
+import type { ApplicationDatabase } from '../db/database_connection';
+import { APPLICATION_LOGGER } from '../shared/logging/logging.module';
+import type { ApplicationLogger } from '../shared/logging/application_logger';
+import {
+  bootstrap_demo_lawyer_account,
+  type LawyerAccountBootstrapOutcome,
+  type LawyerAccountRepository,
+} from './lawyer_account_bootstrap';
+import { BetterAuthLawyerSessionReader } from './better_auth_lawyer_session_reader';
+import { DrizzleLawyerAccountRepository } from './drizzle_lawyer_account_repository';
+import { build_lawyer_auth, LAWYER_AUTH, type LawyerAuth } from './lawyer_auth';
+import {
+  Argon2idLawyerPasswordHasher,
+  LAWYER_PASSWORD_HASHER,
+  type LawyerPasswordHasher,
+} from './lawyer_password_hasher';
+import { LAWYER_SESSION_READER, type LawyerSessionReader } from './lawyer_session_reader';
+import { LAWYER_AUTH_LOG_CONTEXT } from './lawyer_auth_logging';
+
+export const LAWYER_ACCOUNT_REPOSITORY: unique symbol = Symbol('LAWYER_ACCOUNT_REPOSITORY');
+
+// L'amorcage tourne au demarrage de l'application, pas dans un script separe :
+// apres install.sh, personne n'a de terminal a ouvrir, et un compte cree par
+// une commande qu'on oublie de lancer est une installation qui ne sert a rien.
+// Idempotent par construction : relancer ne duplique pas et n'echoue pas.
+@Injectable()
+export class DemoLawyerAccountBootstrapper implements OnModuleInit {
+  constructor(
+    @Inject(APPLICATION_ENVIRONMENT) private readonly environment: ApplicationEnvironment,
+    @Inject(LAWYER_ACCOUNT_REPOSITORY)
+    private readonly lawyer_accounts: LawyerAccountRepository,
+    @Inject(APPLICATION_LOGGER) private readonly logger: ApplicationLogger,
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    const outcome: LawyerAccountBootstrapOutcome = await bootstrap_demo_lawyer_account(
+      {
+        email: this.environment.demo_lawyer_email,
+        plaintext_password: this.environment.demo_lawyer_password,
+      },
+      { lawyer_accounts: this.lawyer_accounts },
+    );
+
+    // L'email seul, jamais le mot de passe : ce journal est lu par plus de
+    // monde que la base.
+    this.logger.info(
+      LAWYER_AUTH_LOG_CONTEXT,
+      outcome.account_was_created
+        ? 'compte avocat de demonstration cree'
+        : 'compte avocat de demonstration deja present',
+      { demo_lawyer_email: this.environment.demo_lawyer_email },
+    );
+  }
+}
+
+@Global()
+@Module({
+  providers: [
+    {
+      provide: LAWYER_PASSWORD_HASHER,
+      useFactory: (): LawyerPasswordHasher => new Argon2idLawyerPasswordHasher(),
+    },
+    {
+      provide: LAWYER_AUTH,
+      inject: [
+        APPLICATION_DATABASE,
+        LAWYER_PASSWORD_HASHER,
+        APPLICATION_ENVIRONMENT,
+        APPLICATION_LOGGER,
+      ],
+      useFactory: (
+        database: ApplicationDatabase,
+        password_hasher: LawyerPasswordHasher,
+        environment: ApplicationEnvironment,
+        logger: ApplicationLogger,
+      ): LawyerAuth =>
+        build_lawyer_auth({
+          database,
+          password_hasher,
+          public_base_url: environment.public_base_url,
+          node_environment: environment.node_environment,
+          logger,
+        }),
+    },
+    {
+      provide: LAWYER_SESSION_READER,
+      inject: [LAWYER_AUTH],
+      useFactory: (lawyer_auth: LawyerAuth): LawyerSessionReader =>
+        new BetterAuthLawyerSessionReader(lawyer_auth),
+    },
+    {
+      provide: LAWYER_ACCOUNT_REPOSITORY,
+      inject: [APPLICATION_DATABASE, LAWYER_PASSWORD_HASHER],
+      useFactory: (
+        database: ApplicationDatabase,
+        password_hasher: LawyerPasswordHasher,
+      ): LawyerAccountRepository =>
+        new DrizzleLawyerAccountRepository(database, password_hasher),
+    },
+    DemoLawyerAccountBootstrapper,
+  ],
+  exports: [LAWYER_AUTH, LAWYER_SESSION_READER, LAWYER_PASSWORD_HASHER, LAWYER_ACCOUNT_REPOSITORY],
+})
+export class LawyerAuthModule {}

@@ -5,7 +5,17 @@ import { SetMetadata } from '@nestjs/common';
 // anonyme » et « appele par MinIO avec un secret partage » n'ont rien a voir :
 // les confondre derriere un unique @Public() ferait qu'un oubli sur l'un
 // ouvrirait l'autre. Chaque exception au defaut est donc nommee.
-export type RouteAccessKind = 'lawyer' | 'client_link' | 'internal' | 'health';
+export type RouteAccessKind =
+  | 'lawyer'
+  | 'client_link'
+  | 'internal'
+  | 'health'
+  // Se connecter ne peut pas exiger d'etre deja connecte : la surface
+  // d'authentification est necessairement ouverte. Elle porte un nom a elle
+  // plutot que d'emprunter `client_link` ou `health` — la ranger avec les
+  // sondes ferait passer pour sans effet de bord la route la plus attaquee du
+  // service.
+  | 'public_auth';
 
 export const ROUTE_ACCESS_METADATA_KEY = 'portail:route_access';
 
@@ -21,6 +31,15 @@ export const InternalRoute = (): MethodDecorator & ClassDecorator =>
 
 export const HealthRoute = (): MethodDecorator & ClassDecorator =>
   SetMetadata(ROUTE_ACCESS_METADATA_KEY, 'health' satisfies RouteAccessKind);
+
+// Une route qui n'est pas servie par le routeur Nest n'a pas de decorateur ou
+// accrocher son acces : elle doit etre declaree a la main. Le type est partage
+// avec le recensement du routeur pour que les deux surfaces se comparent.
+export interface RouteAccessDeclaration {
+  http_method: string;
+  path: string;
+  access_kind: RouteAccessKind;
+}
 
 export class ConflictingRouteAccessError extends Error {
   constructor(readonly declared_kinds: readonly RouteAccessKind[]) {

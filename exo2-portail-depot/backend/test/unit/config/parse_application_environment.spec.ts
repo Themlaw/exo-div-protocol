@@ -11,6 +11,7 @@ import {
   FORBIDDEN_PRODUCTION_PLACEHOLDER_FRAGMENTS,
   MINIO_DEFAULT_ROOT_CREDENTIAL,
   type ApplicationEnvironment,
+  type EnvironmentViolation,
 } from '../../../src/config/environment';
 
 const VALID_RAW_ENVIRONMENT: Readonly<Record<string, string>> = {
@@ -25,6 +26,7 @@ const VALID_RAW_ENVIRONMENT: Readonly<Record<string, string>> = {
   MINIO_ROOT_PASSWORD: 'f'.repeat(64),
   DEMO_LAWYER_EMAIL: 'avocat@cabinet-demonstration.fr',
   TRUSTED_PROXY_HOP_COUNT: '1',
+  PUBLIC_BASE_URL: 'https://portail.cabinet-demonstration.fr',
   DEMO_LAWYER_PASSWORD: 'cheval batterie agrafe correct girafe',
 };
 
@@ -57,6 +59,7 @@ describe('parse_application_environment', () => {
       minio_root_password: VALID_RAW_ENVIRONMENT.MINIO_ROOT_PASSWORD,
       demo_lawyer_email: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_EMAIL,
       trusted_proxy_hop_count: 1,
+      public_base_url: VALID_RAW_ENVIRONMENT.PUBLIC_BASE_URL,
       demo_lawyer_password: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_PASSWORD,
     });
   });
@@ -527,5 +530,96 @@ describe('coherence entre le contrat et le jeu de test', () => {
     expect(Object.keys(VALID_RAW_ENVIRONMENT).sort()).toEqual(
       [...REQUIRED_ENVIRONMENT_VARIABLES].sort(),
     );
+  });
+});
+
+// PUBLIC_BASE_URL fixe l'origine de confiance de l'authentification : c'est
+// elle qui decide quelles pages ont le droit de poster vers l'API, et le
+// domaine sur lequel le cookie de session est pose. La deduire des en-tetes de
+// la requete reviendrait a laisser le client designer sa propre origine de
+// confiance.
+describe('PUBLIC_BASE_URL', () => {
+  function raw_environment_with_public_base_url(
+    public_base_url: string,
+    node_environment: string = 'production',
+  ): Readonly<Record<string, string | undefined>> {
+    return {
+      ...VALID_RAW_ENVIRONMENT,
+      NODE_ENV: node_environment,
+      PUBLIC_BASE_URL: public_base_url,
+    };
+  }
+
+  function violations_of(
+    raw_environment: Readonly<Record<string, string | undefined>>,
+  ): readonly EnvironmentViolation[] {
+    try {
+      parse_application_environment(raw_environment);
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(InvalidEnvironmentError);
+      return (error as InvalidEnvironmentError).violations;
+    }
+    throw new Error('parse_application_environment aurait du lever');
+  }
+
+  it.each([
+    ['sans schema', 'portail.cabinet-demonstration.fr'],
+    ['schema non http', 'ftp://portail.cabinet-demonstration.fr'],
+    ['hote vide', 'https://'],
+    ['chaine sans rapport', 'pas-une-url'],
+  ])('une valeur %s est malformed', (_label: string, public_base_url: string) => {
+    expect(violations_of(raw_environment_with_public_base_url(public_base_url))).toContainEqual({
+      variable: 'PUBLIC_BASE_URL',
+      reason: 'malformed',
+    });
+  });
+
+  it(
+    "une URL portant des identifiants est malformed : ils seraient recopies dans " +
+      'les journaux et dans les URLs renvoyees au navigateur',
+    () => {
+      expect(
+        violations_of(
+          raw_environment_with_public_base_url('https://avocat:secret@portail.fr'),
+        ),
+      ).toContainEqual({ variable: 'PUBLIC_BASE_URL', reason: 'malformed' });
+    },
+  );
+
+  it(
+    "en production, http:// est une valeur de developpement : le cookie de session " +
+      'ne peut pas etre pose en Secure, donc il voyage en clair',
+    () => {
+      expect(
+        violations_of(
+          raw_environment_with_public_base_url('http://portail.cabinet-demonstration.fr'),
+        ),
+      ).toContainEqual({
+        variable: 'PUBLIC_BASE_URL',
+        reason: 'development_value_in_production',
+      });
+    },
+  );
+
+  it.each([
+    ['localhost', 'https://localhost'],
+    ['boucle locale IPv4', 'https://127.0.0.1'],
+    ['toutes interfaces', 'https://0.0.0.0'],
+  ])(
+    'en production, une base sur %s est une valeur de developpement',
+    (_label: string, public_base_url: string) => {
+      expect(violations_of(raw_environment_with_public_base_url(public_base_url))).toContainEqual({
+        variable: 'PUBLIC_BASE_URL',
+        reason: 'development_value_in_production',
+      });
+    },
+  );
+
+  it('hors production, http sur la boucle locale est accepte : c est le poste de developpement', () => {
+    const application_environment: ApplicationEnvironment = parse_application_environment(
+      raw_environment_with_public_base_url('http://localhost:3000', 'development'),
+    );
+
+    expect(application_environment.public_base_url).toBe('http://localhost:3000');
   });
 });

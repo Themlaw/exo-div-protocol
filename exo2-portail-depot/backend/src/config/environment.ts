@@ -23,6 +23,7 @@ export const ENVIRONMENT_VARIABLE_NAMES = {
   demo_lawyer_email: 'DEMO_LAWYER_EMAIL',
   demo_lawyer_password: 'DEMO_LAWYER_PASSWORD',
   trusted_proxy_hop_count: 'TRUSTED_PROXY_HOP_COUNT',
+  public_base_url: 'PUBLIC_BASE_URL',
 } as const satisfies Record<keyof ApplicationEnvironment, string>;
 
 export const REQUIRED_ENVIRONMENT_VARIABLES: readonly string[] =
@@ -50,6 +51,12 @@ export interface ApplicationEnvironment {
   // `0` est legitime — c'est le mode degrade, ou le proxy frontal ne peut pas
   // ajouter l'en-tete.
   trusted_proxy_hop_count: number;
+  // URL publique du portail. Elle fixe l'origine de confiance de
+  // l'authentification — quelles pages ont le droit de poster vers l'API — et
+  // le domaine du cookie de session. Deduite de l'en-tete `Host`, elle serait
+  // choisie par le client lui-meme : c'est une decision de deploiement, donc
+  // une variable.
+  public_base_url: string;
 }
 
 export type EnvironmentViolationReason =
@@ -335,6 +342,32 @@ function extract_url_password(value: string): string | null {
   }
 }
 
+const ACCEPTED_PUBLIC_BASE_URL_PROTOCOLS: readonly string[] = ['http:', 'https:'];
+
+// Rend l'URL analysee, ou `null` si la valeur n'est pas une base utilisable :
+// mauvais schema, hote absent, ou identifiants embarques — ceux-ci finiraient
+// recopies dans les journaux et dans les URLs renvoyees au navigateur.
+function parse_public_base_url(value: string): URL | null {
+  let parsed_url: URL;
+  try {
+    parsed_url = new URL(value);
+  } catch {
+    return null;
+  }
+
+  if (!ACCEPTED_PUBLIC_BASE_URL_PROTOCOLS.includes(parsed_url.protocol)) {
+    return null;
+  }
+  if (parsed_url.hostname === '') {
+    return null;
+  }
+  if (parsed_url.username !== '' || parsed_url.password !== '') {
+    return null;
+  }
+
+  return parsed_url;
+}
+
 function uses_non_deliverable_email_domain(value: string): boolean {
   const normalized_email: string = value.trim().toLowerCase();
   return NON_DELIVERABLE_EMAIL_DOMAIN_SUFFIXES.some((suffix: string): boolean =>
@@ -382,6 +415,7 @@ export function parse_application_environment(
   const trusted_proxy_hop_count_raw = required_value(
     ENVIRONMENT_VARIABLE_NAMES.trusted_proxy_hop_count,
   );
+  const public_base_url = required_value(ENVIRONMENT_VARIABLE_NAMES.public_base_url);
 
   let trusted_proxy_hop_count: number | undefined;
   if (trusted_proxy_hop_count_raw !== undefined) {
@@ -469,6 +503,17 @@ export function parse_application_environment(
     });
   }
 
+  let parsed_public_base_url: URL | null = null;
+  if (public_base_url !== undefined) {
+    parsed_public_base_url = parse_public_base_url(public_base_url);
+    if (parsed_public_base_url === null) {
+      violations.push({
+        variable: ENVIRONMENT_VARIABLE_NAMES.public_base_url,
+        reason: 'malformed',
+      });
+    }
+  }
+
   // Ces controles ne valent qu'en production : les appliquer partout rendrait le
   // poste de developpement inutilisable, ou pousserait a les contourner.
   if (node_environment === 'production') {
@@ -517,6 +562,22 @@ export function parse_application_environment(
           reason: 'development_value_in_production',
         });
       }
+    }
+
+    // En clair, le cookie de session ne peut pas porter l'attribut `Secure` :
+    // il voyagerait lisible sur le reseau, et c'est lui qui vaut identite.
+    if (parsed_public_base_url !== null && parsed_public_base_url.protocol !== 'https:') {
+      violations.push({
+        variable: ENVIRONMENT_VARIABLE_NAMES.public_base_url,
+        reason: 'development_value_in_production',
+      });
+    }
+
+    if (public_base_url !== undefined && targets_loopback_host(public_base_url)) {
+      violations.push({
+        variable: ENVIRONMENT_VARIABLE_NAMES.public_base_url,
+        reason: 'development_value_in_production',
+      });
     }
 
     if (
@@ -578,5 +639,9 @@ export function parse_application_environment(
       demo_lawyer_password,
     ),
     trusted_proxy_hop_count: trusted_proxy_hop_count ?? 0,
+    public_base_url: resolved(
+      ENVIRONMENT_VARIABLE_NAMES.public_base_url,
+      public_base_url,
+    ),
   };
 }

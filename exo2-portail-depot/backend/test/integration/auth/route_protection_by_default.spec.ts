@@ -42,6 +42,16 @@ const NON_LAWYER_ROUTE_WHITELIST: ReadonlyArray<
     declaration.http_method === 'GET' && declaration.path === '/public/:token',
   (declaration) =>
     declaration.http_method === 'POST' && declaration.path === '/public/:token/unlock',
+  // [F6] La surface d'authentification, declaree a la main parce qu'elle
+  // echappe au routeur Nest. Trois chemins EXACTS et rien de plus : la
+  // bibliotheque en expose une trentaine sous le meme prefixe, et le montage
+  // ne sert que ceux-ci.
+  (declaration) =>
+    declaration.http_method === 'POST' && declaration.path === LAWYER_AUTH_ROUTE_PATHS.sign_in,
+  (declaration) =>
+    declaration.http_method === 'POST' && declaration.path === LAWYER_AUTH_ROUTE_PATHS.sign_out,
+  (declaration) =>
+    declaration.http_method === 'GET' && declaration.path === LAWYER_AUTH_ROUTE_PATHS.session,
 ];
 
 const VALID_ROUTE_ACCESS_KINDS: readonly RouteAccessKind[] = [
@@ -49,6 +59,7 @@ const VALID_ROUTE_ACCESS_KINDS: readonly RouteAccessKind[] = [
   'client_link',
   'internal',
   'health',
+  'public_auth',
 ];
 
 // BetterAuth monte ses propres routes sous /api/auth/* (api-routes.md) : c'est

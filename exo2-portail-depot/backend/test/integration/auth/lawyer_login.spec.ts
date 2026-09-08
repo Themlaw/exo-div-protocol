@@ -136,7 +136,7 @@ describe('POST /api/auth/sign-in/email', () => {
     const second_lawyer_email = `avocat-second-${randomUUID()}@example.test`;
     await integration_test_application!.create_lawyer_account({
       email: second_lawyer_email,
-      password: demo_lawyer_password,
+      plaintext_password: demo_lawyer_password,
     });
 
     const first_account_password_hash =

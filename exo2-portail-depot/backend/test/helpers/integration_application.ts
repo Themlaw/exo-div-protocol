@@ -26,7 +26,7 @@ export interface IntegrationTestApplication {
   // qui a besoin d'un second compte n'a aucun moyen HTTP de l'obtenir.
   create_lawyer_account(input: {
     email: string;
-    password: string;
+    plaintext_password: string;
   }): Promise<string>;
 
   close(): Promise<void>;

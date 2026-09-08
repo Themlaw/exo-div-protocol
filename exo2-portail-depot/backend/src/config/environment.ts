@@ -1,4 +1,7 @@
-import type { NodeEnvironment } from '../auth/lawyer_account_bootstrap';
+import {
+  is_valid_node_environment,
+  type NodeEnvironment,
+} from '../shared/node_environment';
 
 // Les noms sont fixes ICI, et nulle part ailleurs : `.env.example`, install.sh
 // et les tests s'y referent tous. Sans source unique, chacun devine les siens et
@@ -58,16 +61,6 @@ export class InvalidEnvironmentError extends Error {
 export const MINIMUM_ACCESS_LINK_TOKEN_PEPPER_LENGTH = 32;
 
 export const MINIMUM_INTERNAL_STORAGE_WEBHOOK_SECRET_LENGTH = 32;
-
-const VALID_NODE_ENVIRONMENTS: readonly NodeEnvironment[] = [
-  'development',
-  'test',
-  'production',
-];
-
-function is_valid_node_environment(value: string): value is NodeEnvironment {
-  return (VALID_NODE_ENVIRONMENTS as readonly string[]).includes(value);
-}
 
 function is_postgres_database_url(value: string): boolean {
   try {

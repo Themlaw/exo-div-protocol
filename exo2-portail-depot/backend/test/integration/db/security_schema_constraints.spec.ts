@@ -1,5 +1,21 @@
 import postgres from 'postgres';
+import { build_capturing_logger } from '../../helpers/capturing_logger';
 import { MAXIMUM_LAWYER_EMAIL_LENGTH } from '../../../src/shared/lawyer_credentials';
+import { open_database_connection } from '../../../src/db/database_connection';
+import { run_database_migrations } from '../../../src/db/run_database_migrations';
+
+// Le test garantit sa propre precondition plutot que de supposer une base
+// migree a la main : les migrations sont idempotentes, les rejouer ne coute
+// rien, et le jour ou une migration manque le test le dit au lieu d'echouer
+// sur une table absente.
+async function ensure_schema_is_migrated(database_url: string): Promise<void> {
+  const connection = open_database_connection(database_url, build_capturing_logger());
+  try {
+    await run_database_migrations(connection.database);
+  } finally {
+    await connection.close();
+  }
+}
 
 // Ces tests s'adressent a un vrai Postgres : c'est le moteur qu'on teste, pas
 // notre code. Une contrainte CHECK verifiee par une simulation ne prouverait
@@ -24,13 +40,14 @@ const UNIQUE_VIOLATION_SQLSTATE = '23505';
 describe('security.lawyer_login_failure_by_account : normalisation garantie par la base', () => {
   let sql: postgres.Sql;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     assert_not_running_against_production();
     if (DATABASE_URL === undefined || DATABASE_URL === '') {
       throw new Error(
         'DATABASE_URL est requis : ces tests verifient le comportement reel de Postgres',
       );
     }
+    await ensure_schema_is_migrated(DATABASE_URL);
     sql = postgres(DATABASE_URL, { max: 1 });
   });
 
@@ -135,11 +152,12 @@ describe('security.lawyer_login_failure_by_account : normalisation garantie par 
 describe('contraintes manquantes sur les compteurs et sur auth.user', () => {
   let sql: postgres.Sql;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     assert_not_running_against_production();
     if (DATABASE_URL === undefined || DATABASE_URL === '') {
       throw new Error('DATABASE_URL est requis');
     }
+    await ensure_schema_is_migrated(DATABASE_URL);
     sql = postgres(DATABASE_URL, { max: 1 });
   });
 

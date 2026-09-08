@@ -1,5 +1,5 @@
 {
-  "id": "a7205390-ad21-48a9-b3a8-44ae2c1a955f",
+  "id": "ec82de32-a65a-404e-a66e-ee902998b1fd",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -89,7 +89,44 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "account_user_id_idx": {
+          "name": "account_user_id_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "account_provider_id_account_id_key": {
+          "name": "account_provider_id_account_id_key",
+          "columns": [
+            {
+              "expression": "providerId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "accountId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "account_userId_user_id_fk": {
           "name": "account_userId_user_id_fk",
@@ -167,7 +204,23 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "session_user_id_idx": {
+          "name": "session_user_id_idx",
+          "columns": [
+            {
+              "expression": "userId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "session_userId_user_id_fk": {
           "name": "session_userId_user_id_fk",
@@ -261,7 +314,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "user_email_is_normalized": {
+          "name": "user_email_is_normalized",
+          "value": "\"auth\".\"user\".\"email\" = lower(\"auth\".\"user\".\"email\")\n      AND \"auth\".\"user\".\"email\" ~ '^[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+@[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+\\.[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+$'\n      AND length(\"auth\".\"user\".\"email\") <= 254"
+        }
+      },
       "isRLSEnabled": false
     },
     "auth.verification": {
@@ -307,7 +365,23 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "verification_identifier_idx": {
+          "name": "verification_identifier_idx",
+          "columns": [
+            {
+              "expression": "identifier",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
@@ -428,7 +502,16 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "lawyer_login_failure_by_account_email_is_normalized": {
+          "name": "lawyer_login_failure_by_account_email_is_normalized",
+          "value": "\"security\".\"lawyer_login_failure_by_account\".\"email\" = lower(\"security\".\"lawyer_login_failure_by_account\".\"email\")\n        AND \"security\".\"lawyer_login_failure_by_account\".\"email\" ~ '^[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+@[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+\\.[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+$'\n        AND length(\"security\".\"lawyer_login_failure_by_account\".\"email\") <= 254"
+        },
+        "lawyer_login_failure_by_account_attempts_is_not_negative": {
+          "name": "lawyer_login_failure_by_account_attempts_is_not_negative",
+          "value": "\"security\".\"lawyer_login_failure_by_account\".\"consecutive_failed_attempts\" >= 0"
+        }
+      },
       "isRLSEnabled": false
     }
   },

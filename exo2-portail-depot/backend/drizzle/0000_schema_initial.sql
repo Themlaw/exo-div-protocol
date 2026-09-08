@@ -39,7 +39,10 @@ CREATE TABLE "auth"."user" (
 	"image" text,
 	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
 	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "user_email_unique" UNIQUE("email")
+	CONSTRAINT "user_email_unique" UNIQUE("email"),
+	CONSTRAINT "user_email_is_normalized" CHECK ("auth"."user"."email" = lower("auth"."user"."email")
+      AND "auth"."user"."email" ~ '^[^@[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+@[^@[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+\.[^@[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$'
+      AND length("auth"."user"."email") <= 254)
 );
 --> statement-breakpoint
 CREATE TABLE "auth"."verification" (
@@ -61,10 +64,18 @@ CREATE TABLE "security"."authentication_failure_by_ip" (
 CREATE TABLE "security"."lawyer_login_failure_by_account" (
 	"email" text PRIMARY KEY NOT NULL,
 	"consecutive_failed_attempts" integer DEFAULT 0 NOT NULL,
-	"last_failed_at" timestamp with time zone DEFAULT now() NOT NULL
+	"last_failed_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "lawyer_login_failure_by_account_email_is_normalized" CHECK ("security"."lawyer_login_failure_by_account"."email" = lower("security"."lawyer_login_failure_by_account"."email")
+        AND "security"."lawyer_login_failure_by_account"."email" ~ '^[^@[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+@[^@[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+\.[^@[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$'
+        AND length("security"."lawyer_login_failure_by_account"."email") <= 254),
+	CONSTRAINT "lawyer_login_failure_by_account_attempts_is_not_negative" CHECK ("security"."lawyer_login_failure_by_account"."consecutive_failed_attempts" >= 0)
 );
 --> statement-breakpoint
 ALTER TABLE "auth"."account" ADD CONSTRAINT "account_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "auth"."session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "account_user_id_idx" ON "auth"."account" USING btree ("userId");--> statement-breakpoint
+CREATE UNIQUE INDEX "account_provider_id_account_id_key" ON "auth"."account" USING btree ("providerId","accountId");--> statement-breakpoint
+CREATE INDEX "session_user_id_idx" ON "auth"."session" USING btree ("userId");--> statement-breakpoint
+CREATE INDEX "verification_identifier_idx" ON "auth"."verification" USING btree ("identifier");--> statement-breakpoint
 CREATE INDEX "authentication_failure_by_ip_window_idx" ON "security"."authentication_failure_by_ip" USING btree ("client_ip","failure_kind","occurred_at");--> statement-breakpoint
 CREATE INDEX "authentication_failure_by_ip_occurred_at_idx" ON "security"."authentication_failure_by_ip" USING btree ("occurred_at");

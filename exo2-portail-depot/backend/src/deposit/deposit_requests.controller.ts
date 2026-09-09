@@ -1,6 +1,7 @@
 import type { IncomingMessage } from 'node:http';
 import {
   BadRequestException,
+  InternalServerErrorException,
   Body,
   Controller,
   Get,
@@ -17,6 +18,11 @@ import {
   type ParsedDepositRequestCreation,
 } from './deposit_request_creation_payload';
 import {
+  ACCESS_LINK_ISSUER,
+  type AccessLinkDelivery,
+  type AccessLinkIssuer,
+} from '../access_link/access_link_issuer';
+import {
   DEPOSIT_REQUEST_REPOSITORY,
   type DepositRequestDetail,
   type DepositRequestOverview,
@@ -31,13 +37,18 @@ export class DepositRequestsController {
   constructor(
     @Inject(DEPOSIT_REQUEST_REPOSITORY)
     private readonly deposit_requests: DepositRequestRepository,
+    @Inject(ACCESS_LINK_ISSUER) private readonly access_link_issuer: AccessLinkIssuer,
   ) {}
 
+  // La creation delivre IMMEDIATEMENT le couple lien + PIN, comme une clef
+  // d'API : l'avocat repart de son formulaire avec le message a envoyer, en un
+  // seul geste. Il ne le reverra jamais — le PIN est hache et le token n'est
+  // stocke que sous forme de HMAC, le serveur en est incapable.
   @Post()
   async create_deposit_request(
     @Req() request: IncomingMessage,
     @Body() body: unknown,
-  ): Promise<{ id: string }> {
+  ): Promise<{ id: string; access_link: AccessLinkDelivery }> {
     const parsed: ParsedDepositRequestCreation = parse_deposit_request_creation(body);
     if (parsed.kind === 'invalid') {
       // Toutes les violations d'un coup, nommees : c'est le formulaire de
@@ -46,13 +57,30 @@ export class DepositRequestsController {
       throw new BadRequestException({ violations: parsed.violations });
     }
 
-    return {
-      id: await this.deposit_requests.create({
-        owner_user_id: this.require_lawyer_session(request).user_id,
-        creation: parsed.creation,
+    const owner_user_id: string = this.require_lawyer_session(request).user_id;
+    const created_id: string = await this.deposit_requests.create({
+      owner_user_id,
+      creation: parsed.creation,
+      security_policy: parsed.security_policy,
+    });
+
+    const delivery: AccessLinkDelivery | null =
+      await this.access_link_issuer.issue_for_deposit_request({
+        deposit_request_id: created_id,
+        owner_user_id,
+        deposit_request_title: parsed.creation.title.trim(),
         security_policy: parsed.security_policy,
-      }),
-    };
+      });
+
+    // Impossible en pratique : la demande vient d'etre creee par cet avocat.
+    // Un `null` ici signifierait que l'emission ne reconnait plus le
+    // proprietaire — mieux vaut une erreur franche qu'une demande muette et
+    // sans acces, qu'aucun ecran ne saurait rattraper.
+    if (delivery === null) {
+      throw new InternalServerErrorException();
+    }
+
+    return { id: created_id, access_link: delivery };
   }
 
   @Get()

@@ -28,6 +28,12 @@ const config: Config = {
   ],
   coverageDirectory: './coverage',
   testEnvironment: 'node',
+  // Le defaut de 5 s suffit a tout SAUF aux tests d'argon2, qui sont lents par
+  // construction : chaque hachage coute ~130 ms et occupe un des quatre fils du
+  // threadpool libuv, partages par tous les processus jest. Sous charge, une
+  // poignee de hachages depassait la limite et rendait un rouge qui ne
+  // designait aucun defaut du code.
+  testTimeout: 30_000,
 };
 
 export default config;

@@ -23,6 +23,15 @@ import {
   CLIENT_PIN_HASHER,
   ConcurrencyBoundedPinHasher,
 } from './client_pin_hasher';
+import {
+  ACCESS_LINK_ISSUER,
+  AccessLinkIssuanceService,
+  RANDOM_SOURCE,
+  SYSTEM_RANDOM_SOURCE,
+  type AccessLinkIssuer,
+} from './access_link_issuer';
+import { CLOCK, type Clock } from '../shared/clock';
+import type { RandomSource } from '../domain/presigned_upload';
 
 @Module({
   providers: [
@@ -47,7 +56,40 @@ import {
       useFactory: (concurrency_gate: Argon2ConcurrencyGate): PinHasher =>
         new ConcurrencyBoundedPinHasher(new Argon2idClientPinHasher(), concurrency_gate),
     },
+    { provide: RANDOM_SOURCE, useValue: SYSTEM_RANDOM_SOURCE },
+    {
+      provide: ACCESS_LINK_ISSUER,
+      inject: [
+        ACCESS_LINK_REPOSITORY,
+        ACCESS_LINK_TOKEN_HASHER,
+        CLIENT_PIN_HASHER,
+        CLOCK,
+        RANDOM_SOURCE,
+        APPLICATION_ENVIRONMENT,
+      ],
+      useFactory: (
+        access_links: AccessLinkRepository,
+        token_hasher: AccessLinkTokenHasher,
+        pin_hasher: PinHasher,
+        clock: Clock,
+        random_source: RandomSource,
+        environment: ApplicationEnvironment,
+      ): AccessLinkIssuer =>
+        new AccessLinkIssuanceService({
+          access_links,
+          token_hasher,
+          pin_hasher,
+          clock,
+          random_source,
+          public_base_url: environment.public_base_url,
+        }),
+    },
   ],
-  exports: [ACCESS_LINK_REPOSITORY, ACCESS_LINK_TOKEN_HASHER, CLIENT_PIN_HASHER],
+  exports: [
+    ACCESS_LINK_REPOSITORY,
+    ACCESS_LINK_TOKEN_HASHER,
+    CLIENT_PIN_HASHER,
+    ACCESS_LINK_ISSUER,
+  ],
 })
 export class AccessLinkModule {}

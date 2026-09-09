@@ -112,6 +112,16 @@ export interface IntegrationTestApplicationOptions {
   // Le defaut est le mode degrade : c'est celui ou la limitation doit tenir
   // toute seule.
   trusted_proxy_hop_count?: number;
+  // Permet d'affirmer qu'un secret n'est PAS journalise. Sans capture, un test
+  // ne peut que constater que l'application n'a pas plante.
+  logger?: ApplicationLogger;
+}
+
+// Muet par defaut : les tests d'integration en emettraient des centaines, et
+// c'est le fournisseur de production qui ecrit sur la sortie standard.
+function app_logger_of_last_resort(): ApplicationLogger {
+  const ignore = (): void => undefined;
+  return { debug: ignore, info: ignore, warn: ignore, error: ignore };
 }
 
 // Compte les appels reels au hachage. La verification en fait partie : c'est
@@ -166,6 +176,8 @@ export async function create_integration_test_application(
     .useValue(counting_password_hasher)
     .overrideProvider(CLOCK)
     .useValue(options?.clock ?? new SystemClock())
+    .overrideProvider(APPLICATION_LOGGER)
+    .useValue(options?.logger ?? app_logger_of_last_resort())
     .overrideProvider(APPLICATION_ENVIRONMENT)
     .useValue({
       ...parse_application_environment(process.env),

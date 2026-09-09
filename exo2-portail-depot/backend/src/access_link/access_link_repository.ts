@@ -29,6 +29,16 @@ export interface AccessLinkRepository {
 
   find_by_token_hmac(token_hmac: string): Promise<AccessLink | null>;
 
+  // Une lecture BON MARCHE, faite avant de tirer quoi que ce soit : emettre un
+  // lien coute un hachage argon2 de ~130 ms, et le payer avant de savoir si
+  // l'avocat a le droit de demander offrirait ce travail a qui enverrait des
+  // identifiants au hasard. Ce n'est pas la garantie d'appartenance — celle-la
+  // reste dans la transaction d'ecriture, seule a l'abri d'une course.
+  confirms_deposit_request_ownership(
+    deposit_request_id: string,
+    owner_user_id: string,
+  ): Promise<boolean>;
+
   // Garde optimiste : l'ecriture n'a lieu que si le compteur est reste celui
   // qu'on avait lu. Rend `false` sinon, sans rien ecrire.
   save_attempt_outcome(input: {
@@ -117,6 +127,27 @@ export class DrizzleAccessLinkRepository implements AccessLinkRepository {
 
       return to_domain_access_link(inserted_rows[0] as AccessLinkRow);
     });
+  }
+
+  async confirms_deposit_request_ownership(
+    deposit_request_id: string,
+    owner_user_id: string,
+  ): Promise<boolean> {
+    if (!UUID_SHAPE.test(deposit_request_id)) {
+      return false;
+    }
+
+    const owned_requests = await this.database
+      .select({ id: deposit_request.id })
+      .from(deposit_request)
+      .where(
+        and(
+          eq(deposit_request.id, deposit_request_id),
+          eq(deposit_request.owner_user_id, owner_user_id),
+        ),
+      );
+
+    return owned_requests.length === 1;
   }
 
   async find_by_token_hmac(token_hmac: string): Promise<AccessLink | null> {

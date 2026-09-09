@@ -84,6 +84,7 @@ export class DemoLawyerAccountBootstrapper implements OnModuleInit {
           public_base_url: environment.public_base_url,
           node_environment: environment.node_environment,
           logger,
+          lawyer_auth_secret: environment.lawyer_auth_secret,
         }),
     },
     {

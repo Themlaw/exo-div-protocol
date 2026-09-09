@@ -24,10 +24,22 @@ export const ENVIRONMENT_VARIABLE_NAMES = {
   demo_lawyer_password: 'DEMO_LAWYER_PASSWORD',
   trusted_proxy_hop_count: 'TRUSTED_PROXY_HOP_COUNT',
   public_base_url: 'PUBLIC_BASE_URL',
+  http_port: 'PORT',
+  lawyer_auth_secret: 'BETTER_AUTH_SECRET',
 } as const satisfies Record<keyof ApplicationEnvironment, string>;
 
-export const REQUIRED_ENVIRONMENT_VARIABLES: readonly string[] =
-  Object.values(ENVIRONMENT_VARIABLE_NAMES);
+// Seule variable a porter une valeur par defaut, donc la seule a ne pas etre
+// requise : le port d'ecoute est un detail de deploiement, pas un secret ni une
+// decision de securite. Tout le reste doit etre fourni explicitement.
+export const OPTIONAL_ENVIRONMENT_VARIABLES: readonly string[] = [
+  ENVIRONMENT_VARIABLE_NAMES.http_port,
+];
+
+export const REQUIRED_ENVIRONMENT_VARIABLES: readonly string[] = Object.values(
+  ENVIRONMENT_VARIABLE_NAMES,
+).filter((variable_name: string): boolean =>
+  !OPTIONAL_ENVIRONMENT_VARIABLES.includes(variable_name),
+);
 
 export interface ApplicationEnvironment {
   node_environment: NodeEnvironment;
@@ -57,6 +69,14 @@ export interface ApplicationEnvironment {
   // choisie par le client lui-meme : c'est une decision de deploiement, donc
   // une variable.
   public_base_url: string;
+  // Secret de signature des cookies de session. Sans lui, BetterAuth retombe
+  // sur une constante publiee sur npm : quiconque la connait forge un cookie de
+  // session valide. Le nom est celui que la bibliotheque lit dans
+  // l'environnement, pour qu'une valeur posee la ne puisse pas diverger.
+  lawyer_auth_secret: string;
+  // Port d'ecoute HTTP. `PORT` est le nom que tout l'ecosysteme attend, et il
+  // reste le seul reglage a valeur par defaut.
+  http_port: number;
 }
 
 export type EnvironmentViolationReason =
@@ -98,6 +118,15 @@ export const MINIMUM_INTERNAL_STORAGE_WEBHOOK_SECRET_LENGTH = 64;
 // Identifiant par defaut documente de MinIO, donc le copier-coller le plus
 // probable de tous.
 export const MINIO_DEFAULT_ROOT_CREDENTIAL = 'minioadmin';
+
+// 64 caracteres, comme le poivre et le secret du webhook : ce secret signe les
+// cookies de session, il n'a aucune raison d'etre plus faible.
+export const MINIMUM_LAWYER_AUTH_SECRET_LENGTH = 64;
+
+// La valeur sur laquelle better-auth retombe quand aucun secret n'est fourni.
+// Elle est publiee dans le paquet npm : la refuser explicitement evite qu'elle
+// arrive ici par recopie d'un exemple trouve en ligne.
+export const DEFAULT_BETTER_AUTH_SECRET = 'better-auth-secret-12345678901234567890';
 
 // Fragments qu'on ecrit machinalement en developpement et qui ne doivent jamais
 // atteindre la production. La comparaison est une INCLUSION, pas une egalite :
@@ -342,6 +371,16 @@ function extract_url_password(value: string): string | null {
   }
 }
 
+export const DEFAULT_HTTP_PORT = 3000;
+
+// Bornes volontairement etroites. En bas : les ports inferieurs a 1024 sont
+// privilegies, et le conteneur tourne en uid 1000 — le liage echouerait sur un
+// EACCES obscur au demarrage plutot que sur un message de configuration. En
+// haut : la borne du protocole. `0` est exclu : il demande un port libre au
+// systeme, ce qui n'a de sens que pour un test, jamais pour un service qu'un
+// proxy doit joindre a une adresse connue.
+export const HTTP_PORT_BOUNDS = { min: 1024, max: 65_535 } as const;
+
 const ACCEPTED_PUBLIC_BASE_URL_PROTOCOLS: readonly string[] = ['http:', 'https:'];
 
 // Rend l'URL analysee, ou `null` si la valeur n'est pas une base utilisable :
@@ -362,6 +401,12 @@ function parse_public_base_url(value: string): URL | null {
     return null;
   }
   if (parsed_url.username !== '' || parsed_url.password !== '') {
+    return null;
+  }
+  // BetterAuth derive son `basePath` du chemin de cette URL : un chemin non
+  // vide deplace TOUTES ses routes et les met en 404. La panne serait totale et
+  // muette — l'audit de demarrage annoncerait toujours ses routes ouvertes.
+  if (parsed_url.pathname !== '/' || parsed_url.search !== '' || parsed_url.hash !== '') {
     return null;
   }
 
@@ -416,6 +461,30 @@ export function parse_application_environment(
     ENVIRONMENT_VARIABLE_NAMES.trusted_proxy_hop_count,
   );
   const public_base_url = required_value(ENVIRONMENT_VARIABLE_NAMES.public_base_url);
+  const lawyer_auth_secret = required_value(
+    ENVIRONMENT_VARIABLE_NAMES.lawyer_auth_secret,
+  );
+
+  // Lu sans `required_value` : une absence est un choix legitime, pas une
+  // violation. Une valeur presente, en revanche, est verifiee comme les autres.
+  const http_port_raw: string | undefined =
+    raw_environment[ENVIRONMENT_VARIABLE_NAMES.http_port];
+  let http_port: number = DEFAULT_HTTP_PORT;
+  if (http_port_raw !== undefined && http_port_raw !== '') {
+    const parsed_http_port: number | null = parse_non_negative_integer(http_port_raw);
+    if (
+      parsed_http_port === null ||
+      parsed_http_port < HTTP_PORT_BOUNDS.min ||
+      parsed_http_port > HTTP_PORT_BOUNDS.max
+    ) {
+      violations.push({
+        variable: ENVIRONMENT_VARIABLE_NAMES.http_port,
+        reason: 'malformed',
+      });
+    } else {
+      http_port = parsed_http_port;
+    }
+  }
 
   let trusted_proxy_hop_count: number | undefined;
   if (trusted_proxy_hop_count_raw !== undefined) {
@@ -503,6 +572,16 @@ export function parse_application_environment(
     });
   }
 
+  if (
+    lawyer_auth_secret !== undefined &&
+    lawyer_auth_secret.length < MINIMUM_LAWYER_AUTH_SECRET_LENGTH
+  ) {
+    violations.push({
+      variable: ENVIRONMENT_VARIABLE_NAMES.lawyer_auth_secret,
+      reason: 'malformed',
+    });
+  }
+
   let parsed_public_base_url: URL | null = null;
   if (public_base_url !== undefined) {
     parsed_public_base_url = parse_public_base_url(public_base_url);
@@ -526,6 +605,7 @@ export function parse_application_environment(
       [ENVIRONMENT_VARIABLE_NAMES.minio_root_user, minio_root_user],
       [ENVIRONMENT_VARIABLE_NAMES.minio_root_password, minio_root_password],
       [ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_password, demo_lawyer_password],
+      [ENVIRONMENT_VARIABLE_NAMES.lawyer_auth_secret, lawyer_auth_secret],
     ];
 
     for (const [variable_name, value] of secrets_to_screen) {
@@ -562,6 +642,15 @@ export function parse_application_environment(
           reason: 'development_value_in_production',
         });
       }
+    }
+
+    // Le defaut de la bibliotheque ne contient aucun fragment de la liste
+    // generique : il se refuse nommement.
+    if (lawyer_auth_secret === DEFAULT_BETTER_AUTH_SECRET) {
+      violations.push({
+        variable: ENVIRONMENT_VARIABLE_NAMES.lawyer_auth_secret,
+        reason: 'development_value_in_production',
+      });
     }
 
     // En clair, le cookie de session ne peut pas porter l'attribut `Secure` :
@@ -630,9 +719,11 @@ export function parse_application_environment(
       ENVIRONMENT_VARIABLE_NAMES.minio_root_password,
       minio_root_password,
     ),
-    demo_lawyer_email: resolved(
-      ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_email,
-      demo_lawyer_email,
+    // Normalise ici et pas seulement a l'ecriture : tout lecteur de cette
+    // valeur — journal, compteur d'echecs, comparaison — heriterait sinon de la
+    // variante brute, et deux variantes du meme email ouvrent deux compteurs.
+    demo_lawyer_email: normalize_lawyer_email(
+      resolved(ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_email, demo_lawyer_email),
     ),
     demo_lawyer_password: resolved(
       ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_password,
@@ -642,6 +733,11 @@ export function parse_application_environment(
     public_base_url: resolved(
       ENVIRONMENT_VARIABLE_NAMES.public_base_url,
       public_base_url,
+    ),
+    http_port,
+    lawyer_auth_secret: resolved(
+      ENVIRONMENT_VARIABLE_NAMES.lawyer_auth_secret,
+      lawyer_auth_secret,
     ),
   };
 }

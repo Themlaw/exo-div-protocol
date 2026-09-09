@@ -10,7 +10,18 @@ const ARGON2ID: Algorithm = 2;
 // vient de son cout memoire, que le GPU paie plein tarif.
 export const LAWYER_PASSWORD_HASHING_PARAMETERS = {
   memory_cost_kibibytes: 65_536,
-  time_cost: 3,
+  // `t=3` etait le profil OWASP repris tel quel, sans mesure : il donne 49 ms
+  // de mediane sur une machine de developpement au repos (12 coeurs), tres en
+  // dessous de la cible de 250-500 ms decidee — le facteur de travail impose a
+  // l'attaquant etait donc cinq fois plus faible que voulu.
+  //
+  // `t=8` mesure 133 ms de mediane sur cette meme machine. La valeur n'est pas
+  // calibree a 300 ms ici A DESSEIN : ce serait calibrer sur le mauvais
+  // materiel. La cible est une VM partagee de deux coeurs, ou le meme travail
+  // coute plusieurs fois plus, et chaque hachage occupe un des quatre fils du
+  // threadpool libuv — surcalibrer transformerait la protection en levier de
+  // deni de service. A REMESURER sur la machine de deploiement.
+  time_cost: 8,
   // 2 et non 4 : le degre de parallelisme doit tenir sur la machine la plus
   // modeste ou l'installation tournera, et une VM a souvent deux coeurs. Le
   // demander plus haut que les coeurs disponibles ne rend pas le hachage plus

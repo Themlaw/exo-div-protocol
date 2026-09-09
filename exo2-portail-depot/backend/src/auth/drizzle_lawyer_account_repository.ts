@@ -20,13 +20,28 @@ const UNIQUE_VIOLATION_SQLSTATE = '23505';
 // « mot de passe » se reconnait a ce providerId.
 const CREDENTIAL_PROVIDER_ID = 'credential';
 
+// drizzle-orm ENVELOPPE l'erreur du pilote dans une `DrizzleQueryError` : le
+// SQLSTATE se trouve sur `.cause.code`, jamais sur `.code`. Lire le seul niveau
+// superieur, c'est ne jamais reconnaitre la violation d'unicite — donc laisser
+// remonter l'erreur brute et faire echouer le demarrage de l'instance qui perd
+// la course, alors que l'amorcage se declare idempotent. On remonte donc la
+// chaine des causes, en la bornant : rien ne garantit qu'elle ne boucle pas.
+const MAXIMUM_ERROR_CAUSE_DEPTH = 8;
+
 function is_unique_violation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === UNIQUE_VIOLATION_SQLSTATE
-  );
+  let current_error: unknown = error;
+
+  for (let depth = 0; depth < MAXIMUM_ERROR_CAUSE_DEPTH; depth += 1) {
+    if (typeof current_error !== 'object' || current_error === null) {
+      return false;
+    }
+    if ((current_error as { code?: unknown }).code === UNIQUE_VIOLATION_SQLSTATE) {
+      return true;
+    }
+    current_error = (current_error as { cause?: unknown }).cause;
+  }
+
+  return false;
 }
 
 // L'inscription HTTP est fermee (`disableSignUp`), et ce drapeau ferme aussi la

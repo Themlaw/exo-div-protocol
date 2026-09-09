@@ -339,3 +339,57 @@ describe('masquage des secrets contenus dans un texte d erreur', () => {
     expect(redacted.failure.stack).not.toContain('secret-reel');
   });
 });
+
+// Revue offensive du 2026-09-08 : `format_log_entry` ne masquait QUE les champs.
+// Le message, lui, etait recopie tel quel — or la passerelle BetterAuth y verse
+// des chaines entierement choisies par l'appelant, comme « Invalid origin: ... ».
+describe('le message est masque et borne comme les champs', () => {
+  it("un secret contenu dans le message est masque : le message n'est pas plus sur qu'un champ", () => {
+    const formatted: string = format_log_entry({
+      level: 'error',
+      message: 'echec de connexion a postgres://portail:mot-de-passe-secret@base:5432/portail',
+      context: 'database',
+      timestamp: '2026-09-08T12:00:00.000Z',
+    });
+
+    expect(formatted).not.toContain('mot-de-passe-secret');
+  });
+
+  it('un jeton porteur present dans le message est masque', () => {
+    const formatted: string = format_log_entry({
+      level: 'warn',
+      message: 'en-tete rejete : Bearer aaaabbbbccccddddeeeeffff',
+      context: 'lawyer_auth',
+      timestamp: '2026-09-08T12:00:00.000Z',
+    });
+
+    expect(formatted).not.toContain('aaaabbbbccccddddeeeeffff');
+  });
+
+  it(
+    "un message demesure est tronque : il est choisi par l'appelant, donc parfois par " +
+      "l'attaquant, et une ligne de journal par requete de 8 Ko est un vecteur de saturation",
+    () => {
+      const formatted: string = format_log_entry({
+        level: 'error',
+        message: `Invalid origin: ${'x'.repeat(20_000)}`,
+        context: 'lawyer_auth',
+        timestamp: '2026-09-08T12:00:00.000Z',
+      });
+
+      expect(formatted.length).toBeLessThan(LOG_VALUE_LIMITS.max_string_length * 2);
+      expect(formatted).toContain(TRUNCATED_VALUE_SUFFIX);
+    },
+  );
+
+  it('un message ordinaire traverse sans etre altere', () => {
+    const formatted: string = format_log_entry({
+      level: 'info',
+      message: 'application demarree',
+      context: 'application',
+      timestamp: '2026-09-08T12:00:00.000Z',
+    });
+
+    expect(JSON.parse(formatted).message).toBe('application demarree');
+  });
+});

@@ -229,7 +229,11 @@ export function format_log_entry(entry: StructuredLogEntry): string {
   // puisse pas contourner par inadvertance.
   const serializable_entry = {
     level: entry.level,
-    message: entry.message,
+    // Le message subit le meme traitement que les champs. Il n'est pas plus
+    // sur : la passerelle de BetterAuth y verse des chaines entierement
+    // choisies par l'appelant — « Invalid origin: ... » recopie un en-tete de
+    // la requete — et une erreur de connexion Postgres y met son URL.
+    message: truncate_text(redact_secrets_in_text(entry.message)),
     context: entry.context,
     timestamp: entry.timestamp,
     ...(entry.fields === undefined ? {} : { fields: redact_log_fields(entry.fields) }),

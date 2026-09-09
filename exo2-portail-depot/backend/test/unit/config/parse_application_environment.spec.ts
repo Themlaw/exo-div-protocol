@@ -5,6 +5,9 @@ import {
 import {
   parse_application_environment,
   InvalidEnvironmentError,
+  DEFAULT_HTTP_PORT,
+  MINIMUM_LAWYER_AUTH_SECRET_LENGTH,
+  DEFAULT_BETTER_AUTH_SECRET,
   MINIMUM_ACCESS_LINK_TOKEN_PEPPER_LENGTH,
   MINIMUM_INTERNAL_STORAGE_WEBHOOK_SECRET_LENGTH,
   REQUIRED_ENVIRONMENT_VARIABLES,
@@ -27,6 +30,7 @@ const VALID_RAW_ENVIRONMENT: Readonly<Record<string, string>> = {
   DEMO_LAWYER_EMAIL: 'avocat@cabinet-demonstration.fr',
   TRUSTED_PROXY_HOP_COUNT: '1',
   PUBLIC_BASE_URL: 'https://portail.cabinet-demonstration.fr',
+  BETTER_AUTH_SECRET: 'a'.repeat(MINIMUM_LAWYER_AUTH_SECRET_LENGTH),
   DEMO_LAWYER_PASSWORD: 'cheval batterie agrafe correct girafe',
 };
 
@@ -60,6 +64,8 @@ describe('parse_application_environment', () => {
       demo_lawyer_email: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_EMAIL,
       trusted_proxy_hop_count: 1,
       public_base_url: VALID_RAW_ENVIRONMENT.PUBLIC_BASE_URL,
+      lawyer_auth_secret: VALID_RAW_ENVIRONMENT.BETTER_AUTH_SECRET,
+      http_port: DEFAULT_HTTP_PORT,
       demo_lawyer_password: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_PASSWORD,
     });
   });
@@ -621,5 +627,177 @@ describe('PUBLIC_BASE_URL', () => {
     );
 
     expect(application_environment.public_base_url).toBe('http://localhost:3000');
+  });
+});
+
+// Le port est la seule variable facultative : une installation qui ne le
+// renseigne pas doit demarrer, la valeur par defaut etant celle que le
+// Dockerfile et le proxy connaissent deja.
+describe('PORT', () => {
+  function raw_environment_with_port(
+    port: string | undefined,
+  ): Readonly<Record<string, string | undefined>> {
+    return { ...VALID_RAW_ENVIRONMENT, PORT: port };
+  }
+
+  function violations_for_port(port: string): readonly EnvironmentViolation[] {
+    try {
+      parse_application_environment(raw_environment_with_port(port));
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(InvalidEnvironmentError);
+      return (error as InvalidEnvironmentError).violations;
+    }
+    throw new Error('parse_application_environment aurait du lever');
+  }
+
+  it('absente, le port vaut la valeur par defaut et le demarrage n est pas bloque', () => {
+    expect(parse_application_environment(raw_environment_with_port(undefined)).http_port).toBe(
+      DEFAULT_HTTP_PORT,
+    );
+  });
+
+  it("vide, le port vaut aussi la valeur par defaut : une variable presente mais vide n'est pas un reglage", () => {
+    expect(parse_application_environment(raw_environment_with_port('')).http_port).toBe(
+      DEFAULT_HTTP_PORT,
+    );
+  });
+
+  it('une valeur explicite est retenue telle quelle', () => {
+    expect(parse_application_environment(raw_environment_with_port('8080')).http_port).toBe(8080);
+  });
+
+  it.each([
+    ['non numerique', 'quatre-vingt'],
+    ['decimal', '3000.5'],
+    ['negatif', '-1'],
+    ['notation exponentielle', '3e3'],
+    ['espaces autour', ' 3000 '],
+    ['hors borne haute', '65536'],
+    ['zero', '0'],
+  ])('une valeur %s est malformed plutot que silencieusement corrigee', (_label: string, port: string) => {
+    expect(violations_for_port(port)).toContainEqual({ variable: 'PORT', reason: 'malformed' });
+  });
+
+  it(
+    "un port privilegie est refuse : le conteneur tourne en uid 1000, le liage echouerait " +
+      "sur un EACCES obscur au lieu d'un message de configuration",
+    () => {
+      expect(violations_for_port('80')).toContainEqual({
+        variable: 'PORT',
+        reason: 'malformed',
+      });
+    },
+  );
+
+  it("PORT ne figure pas parmi les variables requises : c'est la seule qui a une valeur par defaut", () => {
+    expect(REQUIRED_ENVIRONMENT_VARIABLES).not.toContain('PORT');
+  });
+});
+
+// Revue offensive du 2026-09-08. Sans cette variable, BetterAuth retombe sur une
+// constante publiee sur npm et LEVE a la premiere requete en production : le
+// demarrage est vert, tous les journaux sont normaux, et le portail repond 500.
+// C'est exactement la panne que ce parsing existe pour rendre impossible.
+describe('BETTER_AUTH_SECRET', () => {
+  function raw_environment_with_secret(
+    secret: string | undefined,
+    node_environment: string = 'production',
+  ): Readonly<Record<string, string | undefined>> {
+    return { ...VALID_RAW_ENVIRONMENT, NODE_ENV: node_environment, BETTER_AUTH_SECRET: secret };
+  }
+
+  function violations_of(
+    raw_environment: Readonly<Record<string, string | undefined>>,
+  ): readonly EnvironmentViolation[] {
+    try {
+      parse_application_environment(raw_environment);
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(InvalidEnvironmentError);
+      return (error as InvalidEnvironmentError).violations;
+    }
+    throw new Error('parse_application_environment aurait du lever');
+  }
+
+  it('figure parmi les variables requises', () => {
+    expect(REQUIRED_ENVIRONMENT_VARIABLES).toContain('BETTER_AUTH_SECRET');
+  });
+
+  it('absente, le demarrage est refuse plutot que reporte a la premiere connexion', () => {
+    expect(violations_of(raw_environment_with_secret(undefined))).toContainEqual({
+      variable: 'BETTER_AUTH_SECRET',
+      reason: 'missing',
+    });
+  });
+
+  it('trop courte, elle est malformed : ce secret signe les cookies de session', () => {
+    expect(
+      violations_of(raw_environment_with_secret('a'.repeat(MINIMUM_LAWYER_AUTH_SECRET_LENGTH - 1))),
+    ).toContainEqual({ variable: 'BETTER_AUTH_SECRET', reason: 'malformed' });
+  });
+
+  it(
+    "la valeur par defaut de la bibliotheque est refusee explicitement : elle est publiee " +
+      'sur npm, donc quiconque la connait peut forger un cookie de session',
+    () => {
+      expect(
+        violations_of(raw_environment_with_secret(DEFAULT_BETTER_AUTH_SECRET)),
+      ).toContainEqual({
+        variable: 'BETTER_AUTH_SECRET',
+        reason: 'development_value_in_production',
+      });
+    },
+  );
+
+  it('un secret bidon est refuse en production comme les autres', () => {
+    expect(violations_of(raw_environment_with_secret('changeme-changeme-changeme-changeme-changeme-changeme-changeme-x'))).toContainEqual({
+      variable: 'BETTER_AUTH_SECRET',
+      reason: 'development_value_in_production',
+    });
+  });
+});
+
+// Revue offensive du 2026-09-08 : un chemin dans l'URL de base devient le
+// `basePath` de BetterAuth et met TOUTES ses routes en 404. Panne totale et
+// silencieuse — l'audit de demarrage annonce toujours ses trois routes ouvertes.
+describe('PUBLIC_BASE_URL portant un chemin', () => {
+  it.each([
+    ['un chemin', 'https://portail.fr/candidat-12'],
+    ['une requete', 'https://portail.fr/?x=1'],
+    ['un fragment', 'https://portail.fr/#ancre'],
+  ])('%s est malformed', (_label: string, public_base_url: string) => {
+    try {
+      parse_application_environment({ ...VALID_RAW_ENVIRONMENT, PUBLIC_BASE_URL: public_base_url });
+    } catch (error: unknown) {
+      expect((error as InvalidEnvironmentError).violations).toContainEqual({
+        variable: 'PUBLIC_BASE_URL',
+        reason: 'malformed',
+      });
+      return;
+    }
+    throw new Error('parse_application_environment aurait du lever');
+  });
+
+  it('la racine, avec ou sans slash final, reste acceptee', () => {
+    for (const public_base_url of ['https://portail.fr', 'https://portail.fr/']) {
+      expect(
+        parse_application_environment({ ...VALID_RAW_ENVIRONMENT, PUBLIC_BASE_URL: public_base_url })
+          .public_base_url,
+      ).toBe(public_base_url);
+    }
+  });
+});
+
+// Revue offensive du 2026-09-08 : l'environnement rendait l'email brut, et le
+// journal d'amorcage affichait « Audit.Demo@Cabinet.FR ». Aujourd'hui seule la
+// couche de persistance normalise ; tout futur lecteur heriterait de la variante
+// non normalisee, ce qui est precisement la faille de compteur decrite en memoire.
+describe('DEMO_LAWYER_EMAIL est normalise a la sortie du parsing', () => {
+  it('la casse est rabattue et les espaces retires', () => {
+    const application_environment: ApplicationEnvironment = parse_application_environment({
+      ...VALID_RAW_ENVIRONMENT,
+      DEMO_LAWYER_EMAIL: '  Avocat@Cabinet-Demonstration.FR  ',
+    });
+
+    expect(application_environment.demo_lawyer_email).toBe('avocat@cabinet-demonstration.fr');
   });
 });

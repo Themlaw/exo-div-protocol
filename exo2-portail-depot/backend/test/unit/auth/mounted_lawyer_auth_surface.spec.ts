@@ -25,6 +25,7 @@ function build_lawyer_auth_for_inspection(): LawyerAuth {
     public_base_url: 'http://localhost:3000',
     node_environment: 'test',
     logger: { debug: (): void => {}, info: (): void => {}, warn: (): void => {}, error: (): void => {} },
+    lawyer_auth_secret: 'z'.repeat(64),
   });
 }
 

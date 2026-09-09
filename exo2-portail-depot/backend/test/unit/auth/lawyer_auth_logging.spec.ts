@@ -7,6 +7,7 @@ import {
   neutralize_authentication_failure_message,
 } from '../../../src/auth/lawyer_auth_logging';
 import { build_capturing_logger } from '../../helpers/capturing_logger';
+import { format_log_entry } from '../../../src/shared/logging/application_logger';
 
 // Version sur laquelle les messages ci-dessous ont ete releves. `package.json`
 // l'epingle a l'exact, sans accent circonflexe : ces chaines sont un detail
@@ -113,5 +114,49 @@ describe('les messages d echec de connexion de BetterAuth', () => {
     expect(neutralize_authentication_failure_message('Failed to create session')).toBe(
       'Failed to create session',
     );
+  });
+});
+
+// Revue offensive du 2026-09-08 : la passerelle declarait `log: (level, message)`
+// et jetait `...args`. Or BetterAuth appelle `logger.error(e.name, e)` : toute
+// l'erreur voyage dans le second argument. La ligne structuree disait
+// litteralement {"message":"Error"} pendant que la pile partait sur stderr.
+describe('les arguments supplementaires de BetterAuth', () => {
+  it("l'erreur passee en second argument est conservee dans les champs", () => {
+    const logger = build_capturing_logger();
+
+    build_lawyer_auth_logger(logger).log('error', 'Error', new Error('base injoignable'));
+
+    // Passe par `format_log_entry` et non par `JSON.stringify` : les proprietes
+    // d'une Error ne sont pas enumerables, seul le formatage sait les lire.
+    // Verifier autrement testerait le test, pas la chaine reelle.
+    const entry = logger.entries_at_level('error')[0]!;
+    const formatted: string = format_log_entry({
+      level: entry.level,
+      message: entry.message,
+      context: entry.context,
+      timestamp: '2026-09-08T12:00:00.000Z',
+      fields: entry.fields,
+    });
+
+    expect(formatted).toContain('base injoignable');
+  });
+
+  it('plusieurs arguments supplementaires sont tous conserves', () => {
+    const logger = build_capturing_logger();
+
+    build_lawyer_auth_logger(logger).log('warn', 'contexte', { tentative: 3 }, 'detail');
+
+    const serialized_fields = JSON.stringify(logger.entries_at_level('warn')[0]!.fields);
+    expect(serialized_fields).toContain('3');
+    expect(serialized_fields).toContain('detail');
+  });
+
+  it("un appel sans argument supplementaire ne fabrique pas de champ vide", () => {
+    const logger = build_capturing_logger();
+
+    build_lawyer_auth_logger(logger).log('info', 'demarrage');
+
+    expect(logger.entries_at_level('info')[0]!.fields).toBeUndefined();
   });
 });

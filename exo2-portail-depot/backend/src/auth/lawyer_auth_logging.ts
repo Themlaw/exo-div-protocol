@@ -1,4 +1,8 @@
-import type { ApplicationLogger, LogLevel } from '../shared/logging/application_logger';
+import type {
+  ApplicationLogger,
+  LogFields,
+  LogLevel,
+} from '../shared/logging/application_logger';
 
 export const LAWYER_AUTH_LOG_CONTEXT = 'lawyer_auth';
 
@@ -36,15 +40,29 @@ export interface BetterAuthLoggerOption {
   log: (level: BetterAuthLogLevel, message: string, ...args: unknown[]) => void;
 }
 
+// BetterAuth appelle `logger.error(e.name, e)` : toute l'erreur voyage dans le
+// SECOND argument. Les jeter donnait des lignes {"message":"Error"} qui ne
+// disent rien, pendant que la seule copie exploitable partait sur la console.
+function describe_additional_arguments(
+  additional_arguments: readonly unknown[],
+): LogFields | undefined {
+  if (additional_arguments.length === 0) {
+    return undefined;
+  }
+
+  return { better_auth_details: additional_arguments };
+}
+
 // BetterAuth ecrit sinon directement sur la console, hors de notre masquage des
 // secrets et hors de la collecte : ses lignes seraient les seules du service a
 // pouvoir contenir un jeton en clair.
 export function build_lawyer_auth_logger(logger: ApplicationLogger): BetterAuthLoggerOption {
   return {
-    log: (level: BetterAuthLogLevel, message: string): void => {
+    log: (level: BetterAuthLogLevel, message: string, ...additional_arguments: unknown[]): void => {
       logger[LOG_LEVEL_BY_BETTER_AUTH_LEVEL[level] ?? 'warn'](
         LAWYER_AUTH_LOG_CONTEXT,
         neutralize_authentication_failure_message(message),
+        describe_additional_arguments(additional_arguments),
       );
     },
   };

@@ -112,3 +112,89 @@ export const expected_document = deposit_schema.table(
     ),
   ],
 );
+
+export const access_link_status = deposit_schema.enum('access_link_status', [
+  'active',
+  'blocked',
+  'revoked',
+]);
+
+// Le lien est une ENTITE, pas trois colonnes sur la demande : une demande en
+// porte plusieurs, successifs, et cet historique EST le journal d'audit. Un
+// lien revoque reste donc en base avec sa date et son compteur — c'est ce qui
+// permettra de dire a l'avocat que le precedent etait tombe apres dix echecs,
+// et quand.
+//
+// Aucun statut 'expired' : l'expiration se deduit de `expires_at`, comme dans
+// `is_access_link_usable`. Un statut a poser par une tache de fond mentirait
+// entre deux passages, et la verite se retrouverait a deux endroits.
+export const access_link = deposit_schema.table(
+  'access_link',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    deposit_request_id: uuid('deposit_request_id')
+      .notNull()
+      .references(() => deposit_request.id, { onDelete: 'cascade' }),
+    // Jamais le token : son HMAC. Une base qui fuite ne doit pas livrer des
+    // liens directement utilisables. Voir [[modele-donnees]].
+    token_hmac: text('token_hmac').notNull(),
+    // Ecrite des maintenant alors que la rotation n'est pas implementee :
+    // l'ajouter apres coup obligerait a migrer des lignes dont on ne saurait
+    // plus avec quel poivre elles ont ete calculees.
+    token_pepper_version: integer('token_pepper_version').notNull(),
+    // Hachage lent et sale par lien : on ne retrouve jamais le PIN, on le
+    // verifie.
+    pin_hash: text('pin_hash').notNull(),
+    // La politique est RECOPIEE ici a la creation du lien. La modifier sur la
+    // demande ne doit pas atteindre un lien deja en circulation : un client a
+    // qui on avait promis dix essais ne peut pas se retrouver bloque a cinq.
+    pin_length: integer('pin_length').notNull(),
+    max_pin_attempts: integer('max_pin_attempts').notNull(),
+    failed_pin_attempts: integer('failed_pin_attempts').notNull().default(0),
+    status: access_link_status('status').notNull().default('active'),
+    expires_at: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    blocked_at: timestamp('blocked_at', { withTimezone: true, mode: 'date' }),
+    revoked_at: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+  },
+  (table) => [
+    // Un token designe au plus un lien. L'unicite porte sur l'empreinte SEULE,
+    // et non sur le couple avec la version de poivre : deux lignes de versions
+    // differentes portant la meme empreinte seraient indepartageables a la
+    // lecture, alors meme que la requete filtre bien les deux colonnes.
+    uniqueIndex('access_link_token_hmac_key').on(table.token_hmac),
+    // LA contrainte qui rend « regenerer invalide l'ancien » impossible a
+    // rater. Sans elle, un double-clic produit deux liens actifs sur la meme
+    // demande : le client se fait bloquer sur l'un pendant que l'autre marche
+    // encore, et rien ne le signale.
+    uniqueIndex('access_link_one_active_per_request_idx')
+      .on(table.deposit_request_id)
+      .where(sql`${table.status} = 'active'`),
+    // Postgres n'indexe jamais le cote referencant d'une clef etrangere, et
+    // c'est le predicat de l'historique des liens d'une demande.
+    index('access_link_deposit_request_id_idx').on(table.deposit_request_id, table.created_at),
+    // L'invariant que fast-check verifie cote domaine, tenu aussi par le
+    // moteur : la validation applicative peut etre contournee par un futur
+    // appelant qui ecrirait directement, la contrainte non.
+    check(
+      'access_link_failed_attempts_within_bounds',
+      sql`${table.failed_pin_attempts} BETWEEN 0 AND ${table.max_pin_attempts}`,
+    ),
+    check(
+      'access_link_security_policy_within_bounds',
+      sql`${table.max_pin_attempts} BETWEEN ${sql.raw(String(SECURITY_POLICY_BOUNDS.max_pin_attempts.min))} AND ${sql.raw(String(SECURITY_POLICY_BOUNDS.max_pin_attempts.max))}
+        AND ${table.pin_length} BETWEEN ${sql.raw(String(SECURITY_POLICY_BOUNDS.pin_length.min))} AND ${sql.raw(String(SECURITY_POLICY_BOUNDS.pin_length.max))}`,
+    ),
+    check('access_link_expires_after_creation', sql`${table.expires_at} > ${table.created_at}`),
+    // L'historique EST le journal : un lien bloque ou revoque sans sa date est
+    // un trou dedans, et la question « quand ce lien est-il tombe » n'aurait
+    // plus de reponse.
+    check(
+      'access_link_terminal_status_is_dated',
+      sql`(${table.status} <> 'blocked' OR ${table.blocked_at} IS NOT NULL)
+        AND (${table.status} <> 'revoked' OR ${table.revoked_at} IS NOT NULL)`,
+    ),
+  ],
+);

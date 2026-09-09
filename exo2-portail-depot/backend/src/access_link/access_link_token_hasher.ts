@@ -8,6 +8,8 @@ import {
 // colonne ne coute rien aujourd'hui, alors qu'ajouter la notion apres coup
 // obligerait a migrer des lignes dont on ne saurait plus avec quel poivre elles
 // ont ete calculees.
+export const ACCESS_LINK_TOKEN_HASHER: unique symbol = Symbol('ACCESS_LINK_TOKEN_HASHER');
+
 export const CURRENT_ACCESS_LINK_TOKEN_PEPPER_VERSION = 1;
 
 export interface AccessLinkTokenFingerprint {

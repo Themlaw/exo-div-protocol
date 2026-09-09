@@ -5,6 +5,7 @@ CREATE SCHEMA "security";
 CREATE SCHEMA "deposit";
 --> statement-breakpoint
 CREATE TYPE "security"."authentication_failure_kind" AS ENUM('lawyer_login', 'client_pin');--> statement-breakpoint
+CREATE TYPE "deposit"."access_link_status" AS ENUM('active', 'blocked', 'revoked');--> statement-breakpoint
 CREATE TYPE "deposit"."deposit_request_status" AS ENUM('incomplete', 'processing', 'validated', 'blocked', 'expired_incomplete');--> statement-breakpoint
 CREATE TABLE "auth"."account" (
 	"id" text PRIMARY KEY NOT NULL,
@@ -86,6 +87,28 @@ CREATE TABLE "security"."lawyer_login_failure_by_account_and_ip" (
 	CONSTRAINT "lawyer_login_failure_by_account_and_ip_attempts_is_not_negative" CHECK ("security"."lawyer_login_failure_by_account_and_ip"."consecutive_failed_attempts" >= 0)
 );
 --> statement-breakpoint
+CREATE TABLE "deposit"."access_link" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"deposit_request_id" uuid NOT NULL,
+	"token_hmac" text NOT NULL,
+	"token_pepper_version" integer NOT NULL,
+	"pin_hash" text NOT NULL,
+	"pin_length" integer NOT NULL,
+	"max_pin_attempts" integer NOT NULL,
+	"failed_pin_attempts" integer DEFAULT 0 NOT NULL,
+	"status" "deposit"."access_link_status" DEFAULT 'active' NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"blocked_at" timestamp with time zone,
+	"revoked_at" timestamp with time zone,
+	CONSTRAINT "access_link_failed_attempts_within_bounds" CHECK ("deposit"."access_link"."failed_pin_attempts" BETWEEN 0 AND "deposit"."access_link"."max_pin_attempts"),
+	CONSTRAINT "access_link_security_policy_within_bounds" CHECK ("deposit"."access_link"."max_pin_attempts" BETWEEN 5 AND 20
+        AND "deposit"."access_link"."pin_length" BETWEEN 4 AND 12),
+	CONSTRAINT "access_link_expires_after_creation" CHECK ("deposit"."access_link"."expires_at" > "deposit"."access_link"."created_at"),
+	CONSTRAINT "access_link_terminal_status_is_dated" CHECK (("deposit"."access_link"."status" <> 'blocked' OR "deposit"."access_link"."blocked_at" IS NOT NULL)
+        AND ("deposit"."access_link"."status" <> 'revoked' OR "deposit"."access_link"."revoked_at" IS NOT NULL))
+);
+--> statement-breakpoint
 CREATE TABLE "deposit"."deposit_request" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"owner_user_id" text NOT NULL,
@@ -117,6 +140,7 @@ CREATE TABLE "deposit"."expected_document" (
 --> statement-breakpoint
 ALTER TABLE "auth"."account" ADD CONSTRAINT "account_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "auth"."session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "deposit"."access_link" ADD CONSTRAINT "access_link_deposit_request_id_deposit_request_id_fk" FOREIGN KEY ("deposit_request_id") REFERENCES "deposit"."deposit_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."deposit_request" ADD CONSTRAINT "deposit_request_owner_user_id_user_id_fk" FOREIGN KEY ("owner_user_id") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."expected_document" ADD CONSTRAINT "expected_document_deposit_request_id_deposit_request_id_fk" FOREIGN KEY ("deposit_request_id") REFERENCES "deposit"."deposit_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "account_user_id_idx" ON "auth"."account" USING btree ("userId");--> statement-breakpoint
@@ -126,6 +150,9 @@ CREATE INDEX "verification_identifier_idx" ON "auth"."verification" USING btree 
 CREATE INDEX "authentication_failure_by_ip_window_idx" ON "security"."authentication_failure_by_ip" USING btree ("client_ip","failure_kind","occurred_at");--> statement-breakpoint
 CREATE INDEX "authentication_failure_by_ip_occurred_at_idx" ON "security"."authentication_failure_by_ip" USING btree ("occurred_at");--> statement-breakpoint
 CREATE INDEX "lawyer_login_failure_by_account_and_ip_last_failed_at_idx" ON "security"."lawyer_login_failure_by_account_and_ip" USING btree ("last_failed_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "access_link_token_hmac_key" ON "deposit"."access_link" USING btree ("token_hmac");--> statement-breakpoint
+CREATE UNIQUE INDEX "access_link_one_active_per_request_idx" ON "deposit"."access_link" USING btree ("deposit_request_id") WHERE "deposit"."access_link"."status" = 'active';--> statement-breakpoint
+CREATE INDEX "access_link_deposit_request_id_idx" ON "deposit"."access_link" USING btree ("deposit_request_id","created_at");--> statement-breakpoint
 CREATE INDEX "deposit_request_owner_user_id_idx" ON "deposit"."deposit_request" USING btree ("owner_user_id","created_at");--> statement-breakpoint
 CREATE INDEX "expected_document_deposit_request_id_idx" ON "deposit"."expected_document" USING btree ("deposit_request_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "expected_document_position_within_request_idx" ON "deposit"."expected_document" USING btree ("deposit_request_id","position");

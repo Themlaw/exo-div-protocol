@@ -1,5 +1,5 @@
 {
-  "id": "d7542662-36ee-4fa2-8f7a-16c57fec98e8",
+  "id": "2c0cab6a-7a30-419e-b16f-c2a8ac52e6d2",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -981,6 +981,210 @@
       },
       "isRLSEnabled": false
     },
+    "deposit.deposited_file": {
+      "name": "deposited_file",
+      "schema": "deposit",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "expected_document_id": {
+          "name": "expected_document_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "access_link_id": {
+          "name": "access_link_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "object_key": {
+          "name": "object_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_filename": {
+          "name": "display_filename",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "declared_mime_type": {
+          "name": "declared_mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "detected_mime_type": {
+          "name": "detected_mime_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "declared_size_bytes": {
+          "name": "declared_size_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actual_size_bytes": {
+          "name": "actual_size_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "deposited_file_status",
+          "typeSchema": "deposit",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending_upload'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "uploaded_at": {
+          "name": "uploaded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scanned_at": {
+          "name": "scanned_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "deposited_file_object_key_key": {
+          "name": "deposited_file_object_key_key",
+          "columns": [
+            {
+              "expression": "object_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "deposited_file_one_occupant_per_expected_document_idx": {
+          "name": "deposited_file_one_occupant_per_expected_document_idx",
+          "columns": [
+            {
+              "expression": "expected_document_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status IN ('pending_scan', 'clean')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "deposited_file_access_link_id_idx": {
+          "name": "deposited_file_access_link_id_idx",
+          "columns": [
+            {
+              "expression": "access_link_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "deposited_file_pending_scan_idx": {
+          "name": "deposited_file_pending_scan_idx",
+          "columns": [
+            {
+              "expression": "uploaded_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "status = 'pending_scan'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "deposited_file_expected_document_id_expected_document_id_fk": {
+          "name": "deposited_file_expected_document_id_expected_document_id_fk",
+          "tableFrom": "deposited_file",
+          "tableTo": "expected_document",
+          "schemaTo": "deposit",
+          "columnsFrom": [
+            "expected_document_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "deposited_file_access_link_id_access_link_id_fk": {
+          "name": "deposited_file_access_link_id_access_link_id_fk",
+          "tableFrom": "deposited_file",
+          "tableTo": "access_link",
+          "schemaTo": "deposit",
+          "columnsFrom": [
+            "access_link_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "deposited_file_declared_size_is_positive": {
+          "name": "deposited_file_declared_size_is_positive",
+          "value": "\"deposit\".\"deposited_file\".\"declared_size_bytes\" > 0"
+        },
+        "deposited_file_actual_size_is_positive": {
+          "name": "deposited_file_actual_size_is_positive",
+          "value": "\"deposit\".\"deposited_file\".\"actual_size_bytes\" IS NULL OR \"deposit\".\"deposited_file\".\"actual_size_bytes\" > 0"
+        },
+        "deposited_file_uploaded_at_matches_status": {
+          "name": "deposited_file_uploaded_at_matches_status",
+          "value": "(\"deposit\".\"deposited_file\".\"status\" = 'pending_upload') = (\"deposit\".\"deposited_file\".\"uploaded_at\" IS NULL)"
+        },
+        "deposited_file_scanned_at_matches_verdict": {
+          "name": "deposited_file_scanned_at_matches_verdict",
+          "value": "(\"deposit\".\"deposited_file\".\"status\" IN ('clean', 'infected')) = (\"deposit\".\"deposited_file\".\"scanned_at\" IS NOT NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "deposit.expected_document": {
       "name": "expected_document",
       "schema": "deposit",
@@ -1128,6 +1332,17 @@
         "validated",
         "blocked",
         "expired_incomplete"
+      ]
+    },
+    "deposit.deposited_file_status": {
+      "name": "deposited_file_status",
+      "schema": "deposit",
+      "values": [
+        "pending_upload",
+        "pending_scan",
+        "clean",
+        "infected",
+        "rejected"
       ]
     }
   },

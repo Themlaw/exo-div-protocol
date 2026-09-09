@@ -7,6 +7,7 @@ CREATE SCHEMA "deposit";
 CREATE TYPE "security"."authentication_failure_kind" AS ENUM('lawyer_login', 'client_pin');--> statement-breakpoint
 CREATE TYPE "deposit"."access_link_status" AS ENUM('active', 'blocked', 'revoked');--> statement-breakpoint
 CREATE TYPE "deposit"."deposit_request_status" AS ENUM('incomplete', 'processing', 'validated', 'blocked', 'expired_incomplete');--> statement-breakpoint
+CREATE TYPE "deposit"."deposited_file_status" AS ENUM('pending_upload', 'pending_scan', 'clean', 'infected', 'rejected');--> statement-breakpoint
 CREATE TABLE "auth"."account" (
 	"id" text PRIMARY KEY NOT NULL,
 	"userId" text NOT NULL,
@@ -134,6 +135,26 @@ CREATE TABLE "deposit"."deposit_session" (
 	CONSTRAINT "deposit_session_expires_after_creation" CHECK ("deposit"."deposit_session"."expires_at" > "deposit"."deposit_session"."created_at")
 );
 --> statement-breakpoint
+CREATE TABLE "deposit"."deposited_file" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"expected_document_id" uuid NOT NULL,
+	"access_link_id" uuid NOT NULL,
+	"object_key" text NOT NULL,
+	"display_filename" text NOT NULL,
+	"declared_mime_type" text NOT NULL,
+	"detected_mime_type" text,
+	"declared_size_bytes" integer NOT NULL,
+	"actual_size_bytes" integer,
+	"status" "deposit"."deposited_file_status" DEFAULT 'pending_upload' NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"uploaded_at" timestamp with time zone,
+	"scanned_at" timestamp with time zone,
+	CONSTRAINT "deposited_file_declared_size_is_positive" CHECK ("deposit"."deposited_file"."declared_size_bytes" > 0),
+	CONSTRAINT "deposited_file_actual_size_is_positive" CHECK ("deposit"."deposited_file"."actual_size_bytes" IS NULL OR "deposit"."deposited_file"."actual_size_bytes" > 0),
+	CONSTRAINT "deposited_file_uploaded_at_matches_status" CHECK (("deposit"."deposited_file"."status" = 'pending_upload') = ("deposit"."deposited_file"."uploaded_at" IS NULL)),
+	CONSTRAINT "deposited_file_scanned_at_matches_verdict" CHECK (("deposit"."deposited_file"."status" IN ('clean', 'infected')) = ("deposit"."deposited_file"."scanned_at" IS NOT NULL))
+);
+--> statement-breakpoint
 CREATE TABLE "deposit"."expected_document" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"deposit_request_id" uuid NOT NULL,
@@ -152,6 +173,8 @@ ALTER TABLE "auth"."session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN 
 ALTER TABLE "deposit"."access_link" ADD CONSTRAINT "access_link_deposit_request_id_deposit_request_id_fk" FOREIGN KEY ("deposit_request_id") REFERENCES "deposit"."deposit_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."deposit_request" ADD CONSTRAINT "deposit_request_owner_user_id_user_id_fk" FOREIGN KEY ("owner_user_id") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."deposit_session" ADD CONSTRAINT "deposit_session_access_link_id_access_link_id_fk" FOREIGN KEY ("access_link_id") REFERENCES "deposit"."access_link"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "deposit"."deposited_file" ADD CONSTRAINT "deposited_file_expected_document_id_expected_document_id_fk" FOREIGN KEY ("expected_document_id") REFERENCES "deposit"."expected_document"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "deposit"."deposited_file" ADD CONSTRAINT "deposited_file_access_link_id_access_link_id_fk" FOREIGN KEY ("access_link_id") REFERENCES "deposit"."access_link"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."expected_document" ADD CONSTRAINT "expected_document_deposit_request_id_deposit_request_id_fk" FOREIGN KEY ("deposit_request_id") REFERENCES "deposit"."deposit_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "account_user_id_idx" ON "auth"."account" USING btree ("userId");--> statement-breakpoint
 CREATE UNIQUE INDEX "account_provider_id_account_id_key" ON "auth"."account" USING btree ("providerId","accountId");--> statement-breakpoint
@@ -166,5 +189,9 @@ CREATE INDEX "access_link_deposit_request_id_idx" ON "deposit"."access_link" USI
 CREATE INDEX "deposit_request_owner_user_id_idx" ON "deposit"."deposit_request" USING btree ("owner_user_id","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "deposit_session_token_sha256_key" ON "deposit"."deposit_session" USING btree ("token_sha256");--> statement-breakpoint
 CREATE INDEX "deposit_session_access_link_id_idx" ON "deposit"."deposit_session" USING btree ("access_link_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "deposited_file_object_key_key" ON "deposit"."deposited_file" USING btree ("object_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "deposited_file_one_occupant_per_expected_document_idx" ON "deposit"."deposited_file" USING btree ("expected_document_id") WHERE status IN ('pending_scan', 'clean');--> statement-breakpoint
+CREATE INDEX "deposited_file_access_link_id_idx" ON "deposit"."deposited_file" USING btree ("access_link_id");--> statement-breakpoint
+CREATE INDEX "deposited_file_pending_scan_idx" ON "deposit"."deposited_file" USING btree ("uploaded_at") WHERE status = 'pending_scan';--> statement-breakpoint
 CREATE INDEX "expected_document_deposit_request_id_idx" ON "deposit"."expected_document" USING btree ("deposit_request_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "expected_document_position_within_request_idx" ON "deposit"."expected_document" USING btree ("deposit_request_id","position");

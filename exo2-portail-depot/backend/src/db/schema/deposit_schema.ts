@@ -228,3 +228,91 @@ export const deposit_session = deposit_schema.table(
     check('deposit_session_expires_after_creation', sql`${table.expires_at} > ${table.created_at}`),
   ],
 );
+
+export const deposited_file_status = deposit_schema.enum('deposited_file_status', [
+  'pending_upload',
+  'pending_scan',
+  'clean',
+  'infected',
+  'rejected',
+]);
+
+// Rattachee au DOCUMENT ATTENDU et au LIEN qui l'a deposee. Le lien parce que
+// c'est lui qui a autorise le depot, et que le journal doit pouvoir dire quel
+// porteur a envoye quoi ; le document attendu parce que les pieces appartiennent
+// a la demande et survivent a la regeneration d'un lien. Voir
+// [[securite-lien-pin]] et [[statuts-et-depot]].
+export const deposited_file = deposit_schema.table(
+  'deposited_file',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    expected_document_id: uuid('expected_document_id')
+      .notNull()
+      .references(() => expected_document.id, { onDelete: 'cascade' }),
+    // `cascade` comme le reste, et non `restrict` : la SEULE suppression du
+    // produit est celle d'une demande, et elle atteint le lien et les pieces par
+    // deux chemins a la fois. Un `restrict` ici ferait dependre le succes de
+    // l'ordre dans lequel Postgres deroule les deux cascades. Aucun code ne
+    // supprime jamais un lien seul — la revocation est un statut.
+    access_link_id: uuid('access_link_id')
+      .notNull()
+      .references(() => access_link.id, { onDelete: 'cascade' }),
+    // Construite par le serveur, jamais par le client. Unique : deux lignes qui
+    // designeraient le meme objet feraient qu'une suppression en laisserait une
+    // pointer dans le vide.
+    object_key: text('object_key').notNull(),
+    // Le nom que le client verra, deja nettoye a l'ecriture. Le nom brut n'est
+    // stocke nulle part : il n'a aucun usage et serait rendu tel quel le jour
+    // ou quelqu'un l'afficherait par megarde.
+    display_filename: text('display_filename').notNull(),
+    declared_mime_type: text('declared_mime_type').notNull(),
+    // Vide tant que la detection n'a pas tourne. C'est LUI qui fait foi face a
+    // la liste blanche, le type annonce n'etant que declaratif.
+    detected_mime_type: text('detected_mime_type'),
+    declared_size_bytes: integer('declared_size_bytes').notNull(),
+    actual_size_bytes: integer('actual_size_bytes'),
+    status: deposited_file_status('status').notNull().default('pending_upload'),
+    created_at: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    uploaded_at: timestamp('uploaded_at', { withTimezone: true, mode: 'date' }),
+    scanned_at: timestamp('scanned_at', { withTimezone: true, mode: 'date' }),
+  },
+  (table) => [
+    uniqueIndex('deposited_file_object_key_key').on(table.object_key),
+    // UN document attendu, UNE piece : la regle produit du memo produit ici un
+    // index unique PARTIEL. Il ne porte que sur les statuts occupants, sinon un
+    // upload jamais arrive condamnerait l'emplacement pour toujours. C'est la
+    // contrepartie en base de `does_deposited_file_occupy_expected_document` :
+    // le controleur refuse, et l'index garantit qu'aucune course ne passe.
+    uniqueIndex('deposited_file_one_occupant_per_expected_document_idx')
+      .on(table.expected_document_id)
+      .where(sql`status IN ('pending_scan', 'clean')`),
+    index('deposited_file_access_link_id_idx').on(table.access_link_id),
+    // La reconciliation cherche les pieces qui attendent encore un verdict, et
+    // elle passera regulierement : sans cet index elle balaierait toute la
+    // table a chaque tour.
+    index('deposited_file_pending_scan_idx')
+      .on(table.uploaded_at)
+      .where(sql`status = 'pending_scan'`),
+    check('deposited_file_declared_size_is_positive', sql`${table.declared_size_bytes} > 0`),
+    check(
+      'deposited_file_actual_size_is_positive',
+      sql`${table.actual_size_bytes} IS NULL OR ${table.actual_size_bytes} > 0`,
+    ),
+    // Un objet non arrive n'a pas de date d'arrivee, et tout autre statut en a
+    // forcement une : sans cette contrainte, `is_deposited_file_scan_overdue`
+    // lirait un `uploaded_at` vide sur une piece bel et bien deposee et ne la
+    // declarerait jamais en retard.
+    check(
+      'deposited_file_uploaded_at_matches_status',
+      sql`(${table.status} = 'pending_upload') = (${table.uploaded_at} IS NULL)`,
+    ),
+    // Seuls `clean` et `infected` sont des verdicts. Dater un `pending_scan`
+    // ferait passer pour examine un objet que personne n'a ouvert.
+    check(
+      'deposited_file_scanned_at_matches_verdict',
+      sql`(${table.status} IN ('clean', 'infected')) = (${table.scanned_at} IS NOT NULL)`,
+    ),
+  ],
+);

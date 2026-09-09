@@ -62,6 +62,13 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # Le navigateur poste les octets DIRECTEMENT ici : sans autorisation
+      # d'origine, le POST pre-signe est bloque par le navigateur et l'upload
+      # direct ne marche pas du tout. Une seule origine, celle du portail —
+      # `*` autoriserait n'importe quelle page a poster avec une policy volee.
+      # Le client JS de MinIO n'expose pas `setBucketCors` : la configuration
+      # se fait donc ici, cote serveur, et non depuis l'application.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_BASE_URL}
     volumes:
       - ./data/minio:/data
     tmpfs:

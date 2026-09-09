@@ -168,30 +168,47 @@ export function decide_login_throttle(state: LoginThrottleState): LoginThrottleO
   // Couche principale : le couple (compte, adresse). Refuser ici est sans
   // danger — l'attaquant est sur SON adresse, pas sur celle de la victime, donc
   // ce refus ne peut pas fermer le compte a son titulaire legitime.
-  const account_ip_attempts: number = decay_consecutive_failed_attempts(
+  const account_ip_remaining_seconds: number = remaining_backoff_seconds(
     state.account_ip_failed_attempts,
     state.seconds_since_account_ip_last_failure,
   );
-  const account_ip_delay_seconds: number =
-    compute_login_backoff_delay_seconds(account_ip_attempts);
-  if (account_ip_delay_seconds > 0) {
-    return { kind: 'refuse', retry_after_seconds: account_ip_delay_seconds };
+  if (account_ip_remaining_seconds > 0) {
+    return { kind: 'refuse', retry_after_seconds: account_ip_remaining_seconds };
   }
 
   // Couche anti-rotation d'adresse. Elle est la seule a pouvoir atteindre un
   // avocat legitime — c'est exactement le verrou permanent que la revue a
   // demontre — donc elle RETARDE et ne refuse jamais. Le ralentissement suffit :
   // il s'applique aussi a l'attaquant, qui n'obtient rien de plus.
-  const account_attempts: number = decay_consecutive_failed_attempts(
+  const account_remaining_seconds: number = remaining_backoff_seconds(
     state.account_failed_attempts,
     state.seconds_since_account_last_failure,
   );
-  const account_delay_seconds: number = compute_login_backoff_delay_seconds(account_attempts);
-  if (account_delay_seconds > 0) {
-    return { kind: 'delay', delay_seconds: account_delay_seconds };
+  if (account_remaining_seconds > 0) {
+    return { kind: 'delay', delay_seconds: account_remaining_seconds };
   }
 
   return { kind: 'allow' };
+}
+
+// Le backoff est une ATTENTE a compter du dernier echec, pas un verrou pose
+// jusqu'a la decroissance. Sans cette soustraction, un `Retry-After: 1` renvoye
+// au client durait en realite jusqu'a LOGIN_FAILURE_DECAY_SECONDS — une heure —
+// et trois fautes de frappe fermaient le poste de l'avocat pour l'apres-midi.
+// L'en-tete annonce desormais le temps qui reste, et il dit vrai.
+function remaining_backoff_seconds(
+  consecutive_failed_attempts: number,
+  seconds_since_last_failure: number,
+): number {
+  const decayed_attempts: number = decay_consecutive_failed_attempts(
+    consecutive_failed_attempts,
+    seconds_since_last_failure,
+  );
+
+  return Math.max(
+    0,
+    compute_login_backoff_delay_seconds(decayed_attempts) - seconds_since_last_failure,
+  );
 }
 
 // `isIP` de Node est plus permissif que le type `inet` de Postgres et ne

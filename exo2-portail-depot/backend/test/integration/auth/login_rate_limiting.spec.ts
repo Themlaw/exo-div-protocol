@@ -356,6 +356,14 @@ describe('rate limiting sur la connexion avocat', () => {
 
 // Tests issus de la revue de securite du 2026-09-08. Chacun rejoue une faille
 // au niveau HTTP, la ou les tests precedents ne l'auraient pas vue.
+// SEUL bloc a declarer un relais de confiance, et il le doit : il distingue
+// l'attaquant de l'avocat PAR l'adresse transmise, ce qui n'a de sens que
+// derriere notre Traefik, la ou la derniere entree de la chaine est ecrite par
+// un relais et non par le client. Les autres blocs restent en mode degrade
+// (passthrough SNI, en-tete ignore) — c'est la que [20] prouve qu'un
+// X-Forwarded-For forge ne rend aucun budget de tentatives.
+const TRUSTED_PROXY_HOP_COUNT_BEHIND_TRAEFIK = 1;
+
 describe('[F1] le pilonnage d un compte ne doit pas fermer ce compte', () => {
   let integration_test_application: IntegrationTestApplication | undefined;
   let app: INestApplication;
@@ -364,7 +372,9 @@ describe('[F1] le pilonnage d un compte ne doit pas fermer ce compte', () => {
   const LAWYER_ADDRESS = '198.51.100.12';
 
   beforeAll(async () => {
-    integration_test_application = await create_integration_test_application();
+    integration_test_application = await create_integration_test_application({
+      trusted_proxy_hop_count: TRUSTED_PROXY_HOP_COUNT_BEHIND_TRAEFIK,
+    });
     app = integration_test_application.app;
   });
 
@@ -390,7 +400,10 @@ describe('[F1] le pilonnage d un compte ne doit pas fermer ce compte', () => {
 
   it("meme depuis l'adresse pilonnee, des identifiants corrects finissent par passer : la couche par compte retarde, elle ne ferme pas", async () => {
     const clock = build_mutable_test_clock(new Date('2026-03-12T10:00:00.000Z'));
-    const application_with_clock = await create_integration_test_application({ clock });
+    const application_with_clock = await create_integration_test_application({
+      clock,
+      trusted_proxy_hop_count: TRUSTED_PROXY_HOP_COUNT_BEHIND_TRAEFIK,
+    });
 
     try {
       for (let attempt = 0; attempt < 20; attempt += 1) {

@@ -71,6 +71,18 @@ CREATE TABLE "security"."lawyer_login_failure_by_account" (
 	CONSTRAINT "lawyer_login_failure_by_account_attempts_is_not_negative" CHECK ("security"."lawyer_login_failure_by_account"."consecutive_failed_attempts" >= 0)
 );
 --> statement-breakpoint
+CREATE TABLE "security"."lawyer_login_failure_by_account_and_ip" (
+	"email" text NOT NULL,
+	"client_ip" "inet" NOT NULL,
+	"consecutive_failed_attempts" integer DEFAULT 0 NOT NULL,
+	"last_failed_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "lawyer_login_failure_by_account_and_ip_email_client_ip_pk" PRIMARY KEY("email","client_ip"),
+	CONSTRAINT "lawyer_login_failure_by_account_and_ip_email_is_normalized" CHECK ("security"."lawyer_login_failure_by_account_and_ip"."email" = lower("security"."lawyer_login_failure_by_account_and_ip"."email")
+        AND "security"."lawyer_login_failure_by_account_and_ip"."email" ~ '^[^@[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+@[^@[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+\.[^@[:space:]\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$'
+        AND length("security"."lawyer_login_failure_by_account_and_ip"."email") <= 254),
+	CONSTRAINT "lawyer_login_failure_by_account_and_ip_attempts_is_not_negative" CHECK ("security"."lawyer_login_failure_by_account_and_ip"."consecutive_failed_attempts" >= 0)
+);
+--> statement-breakpoint
 ALTER TABLE "auth"."account" ADD CONSTRAINT "account_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "auth"."session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "account_user_id_idx" ON "auth"."account" USING btree ("userId");--> statement-breakpoint
@@ -78,4 +90,5 @@ CREATE UNIQUE INDEX "account_provider_id_account_id_key" ON "auth"."account" USI
 CREATE INDEX "session_user_id_idx" ON "auth"."session" USING btree ("userId");--> statement-breakpoint
 CREATE INDEX "verification_identifier_idx" ON "auth"."verification" USING btree ("identifier");--> statement-breakpoint
 CREATE INDEX "authentication_failure_by_ip_window_idx" ON "security"."authentication_failure_by_ip" USING btree ("client_ip","failure_kind","occurred_at");--> statement-breakpoint
-CREATE INDEX "authentication_failure_by_ip_occurred_at_idx" ON "security"."authentication_failure_by_ip" USING btree ("occurred_at");
+CREATE INDEX "authentication_failure_by_ip_occurred_at_idx" ON "security"."authentication_failure_by_ip" USING btree ("occurred_at");--> statement-breakpoint
+CREATE INDEX "lawyer_login_failure_by_account_and_ip_last_failed_at_idx" ON "security"."lawyer_login_failure_by_account_and_ip" USING btree ("last_failed_at");

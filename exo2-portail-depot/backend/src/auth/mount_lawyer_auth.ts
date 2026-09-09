@@ -4,6 +4,7 @@ import { toNodeHandler } from 'better-auth/node';
 import type { LawyerAuth } from './lawyer_auth';
 import { NON_NEST_ROUTE_ACCESS_DECLARATIONS } from './non_nest_route_declarations';
 import { LAWYER_AUTH_LOG_CONTEXT } from './lawyer_auth_logging';
+import { targets_lawyer_login, type LawyerLoginThrottler } from './throttle_lawyer_login';
 import type { ApplicationLogger } from '../shared/logging/application_logger';
 
 // La connexion transporte un email et une phrase de passe : quelques centaines
@@ -106,12 +107,21 @@ export function report_lawyer_auth_failure(
   response.end(JSON.stringify({ message: 'Erreur interne' }));
 }
 
+// Le limiteur est une dependance du montage, et non un intergiciel qu'on
+// ajoute a cote : la connexion ne doit pas pouvoir etre servie sans lui. Un
+// `app.use` separe dependrait de l'ordre d'appel dans main.ts, et l'oubli d'une
+// ligne ouvrirait la connexion en grand sans que rien ne le signale.
+export interface LawyerAuthMountDependencies {
+  lawyer_auth: LawyerAuth;
+  throttle_lawyer_login: LawyerLoginThrottler;
+  logger: ApplicationLogger;
+}
+
 export function mount_lawyer_auth_handler(
   app: INestApplication,
-  lawyer_auth: LawyerAuth,
-  logger: ApplicationLogger,
+  dependencies: LawyerAuthMountDependencies,
 ): void {
-  const handle_lawyer_auth_request = toNodeHandler(lawyer_auth);
+  const handle_lawyer_auth_request = toNodeHandler(dependencies.lawyer_auth);
 
   app.use(
     (request: IncomingMessage, response: ServerResponse, next: () => void): void => {
@@ -131,8 +141,26 @@ export function mount_lawyer_auth_handler(
         return;
       }
 
-      handle_lawyer_auth_request(request, response).catch((error: unknown): void => {
-        report_lawyer_auth_failure(error, response, logger);
+      const forward_to_lawyer_auth = (): Promise<void> =>
+        handle_lawyer_auth_request(request, response);
+
+      const handle = (): Promise<void> => {
+        if (!targets_lawyer_login(request.method ?? '', request.url ?? '')) {
+          return forward_to_lawyer_auth();
+        }
+
+        return dependencies
+          .throttle_lawyer_login(request, response)
+          .then(async (throttling_verdict): Promise<void> => {
+            if (throttling_verdict === 'handled') {
+              return;
+            }
+            await forward_to_lawyer_auth();
+          });
+      };
+
+      handle().catch((error: unknown): void => {
+        report_lawyer_auth_failure(error, response, dependencies.logger);
       });
     },
   );

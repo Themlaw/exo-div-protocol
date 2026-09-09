@@ -7,6 +7,8 @@ import { apply_http_hardening } from './shared/http_hardening';
 import { describe_startup_failure } from './shared/startup_failure_report';
 import { mount_lawyer_auth_handler } from './auth/mount_lawyer_auth';
 import { LAWYER_AUTH, type LawyerAuth } from './auth/lawyer_auth';
+import { LAWYER_LOGIN_THROTTLER } from './auth/lawyer_auth.module';
+import type { LawyerLoginThrottler } from './auth/throttle_lawyer_login';
 import type { ApplicationLogger } from './shared/logging/application_logger';
 
 const APPLICATION_LOG_CONTEXT = 'application';
@@ -35,7 +37,11 @@ async function bootstrap(): Promise<void> {
 
   // Avant `listen`, donc avant que le routeur Nest ne soit en place : c'est
   // lui qui repondrait 404 sur /api/auth, ces chemins n'ayant aucun controleur.
-  mount_lawyer_auth_handler(app, app.get<LawyerAuth>(LAWYER_AUTH), logger);
+  mount_lawyer_auth_handler(app, {
+    lawyer_auth: app.get<LawyerAuth>(LAWYER_AUTH),
+    throttle_lawyer_login: app.get<LawyerLoginThrottler>(LAWYER_LOGIN_THROTTLER),
+    logger,
+  });
 
   // Le port passe par la validation de l'environnement comme le reste : une
   // lecture directe de `process.env` ici serait le seul reglage a echapper au

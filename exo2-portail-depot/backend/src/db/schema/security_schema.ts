@@ -5,6 +5,7 @@ import {
   inet,
   integer,
   pgSchema,
+  primaryKey,
   text,
   timestamp,
   uuid,
@@ -105,6 +106,49 @@ export const lawyer_login_failure_by_account = security_schema.table(
     check(
       'lawyer_login_failure_by_account_attempts_is_not_negative',
       sql`${table.consecutive_failed_attempts} >= 0`,
+    ),
+  ],
+);
+
+// La couche PRINCIPALE du limiteur, et la seule des trois qui puisse refuser
+// sans risque : elle compte le couple (compte vise, adresse d'origine).
+// Refuser ici ne ferme rien pour l'avocat legitime, puisque l'attaquant occupe
+// SON adresse et non celle de la victime — c'est exactement ce que le compteur
+// par compte seul ne savait pas distinguer, et qui produisait le verrouillage
+// permanent demontre par la revue du 2026-09-08.
+//
+// Table distincte plutot qu'une colonne ajoutee a l'une des deux precedentes :
+// les trois compteurs n'ont ni la meme clef, ni la meme regle de remise a zero,
+// ni la meme duree de vie. Les fusionner ferait dependre une regle de l'autre.
+export const lawyer_login_failure_by_account_and_ip = security_schema.table(
+  'lawyer_login_failure_by_account_and_ip',
+  {
+    email: text('email').notNull(),
+    client_ip: inet('client_ip').notNull(),
+    consecutive_failed_attempts: integer('consecutive_failed_attempts').notNull().default(0),
+    last_failed_at: timestamp('last_failed_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.email, table.client_ip] }),
+    // Meme raison que sur la table par compte : une casse non rabattue donnerait
+    // un compteur distinct par variante, donc le contournement pur et simple du
+    // backoff. La contrainte tient meme si un appelant futur oublie d'appeler
+    // normalize_lawyer_email.
+    check(
+      'lawyer_login_failure_by_account_and_ip_email_is_normalized',
+      sql`${table.email} = lower(${table.email})
+        AND ${table.email} ~ '^[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+@[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+\\.[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+$'
+        AND length(${table.email}) <= ${sql.raw(String(MAXIMUM_LAWYER_EMAIL_LENGTH))}`,
+    ),
+    check(
+      'lawyer_login_failure_by_account_and_ip_attempts_is_not_negative',
+      sql`${table.consecutive_failed_attempts} >= 0`,
+    ),
+    // Sert la purge, qui balaie par age sans connaitre la clef.
+    index('lawyer_login_failure_by_account_and_ip_last_failed_at_idx').on(
+      table.last_failed_at,
     ),
   ],
 );

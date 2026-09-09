@@ -20,8 +20,25 @@ import {
 } from './lawyer_password_hasher';
 import { LAWYER_SESSION_READER, type LawyerSessionReader } from './lawyer_session_reader';
 import { LAWYER_AUTH_LOG_CONTEXT } from './lawyer_auth_logging';
+import { CLOCK, type Clock } from '../shared/clock';
+import {
+  DrizzleLoginThrottleStore,
+  LOGIN_THROTTLE_STORE,
+  type LoginThrottleStore,
+} from './login_throttle_store';
+import {
+  build_lawyer_login_throttler,
+  type LawyerLoginThrottler,
+} from './throttle_lawyer_login';
+import { MAXIMUM_LAWYER_AUTH_REQUEST_BODY_BYTES } from './mount_lawyer_auth';
+import {
+  build_login_concurrency_gate,
+  type LoginConcurrencyGate,
+} from './login_concurrency_gate';
 
 export const LAWYER_ACCOUNT_REPOSITORY: unique symbol = Symbol('LAWYER_ACCOUNT_REPOSITORY');
+export const LAWYER_LOGIN_THROTTLER: unique symbol = Symbol('LAWYER_LOGIN_THROTTLER');
+export const LOGIN_CONCURRENCY_GATE: unique symbol = Symbol('LOGIN_CONCURRENCY_GATE');
 
 // L'amorcage tourne au demarrage de l'application, pas dans un script separe :
 // apres install.sh, personne n'a de terminal a ouvrir, et un compte cree par
@@ -102,8 +119,53 @@ export class DemoLawyerAccountBootstrapper implements OnModuleInit {
       ): LawyerAccountRepository =>
         new DrizzleLawyerAccountRepository(database, password_hasher),
     },
+    {
+      provide: LOGIN_THROTTLE_STORE,
+      inject: [APPLICATION_DATABASE],
+      useFactory: (database: ApplicationDatabase): LoginThrottleStore =>
+        new DrizzleLoginThrottleStore(database),
+    },
+    {
+      // Un seul portillon pour tout le processus : un par requete ne
+      // plafonnerait rien du tout.
+      provide: LOGIN_CONCURRENCY_GATE,
+      useFactory: (): LoginConcurrencyGate => build_login_concurrency_gate(),
+    },
+    {
+      provide: LAWYER_LOGIN_THROTTLER,
+      inject: [
+        LOGIN_THROTTLE_STORE,
+        CLOCK,
+        LOGIN_CONCURRENCY_GATE,
+        APPLICATION_ENVIRONMENT,
+        APPLICATION_LOGGER,
+      ],
+      useFactory: (
+        throttle_store: LoginThrottleStore,
+        clock: Clock,
+        concurrency_gate: LoginConcurrencyGate,
+        environment: ApplicationEnvironment,
+        logger: ApplicationLogger,
+      ): LawyerLoginThrottler =>
+        build_lawyer_login_throttler({
+          throttle_store,
+          clock,
+          concurrency_gate,
+          trusted_proxy_hop_count: environment.trusted_proxy_hop_count,
+          logger,
+          maximum_request_body_bytes: MAXIMUM_LAWYER_AUTH_REQUEST_BODY_BYTES,
+        }),
+    },
     DemoLawyerAccountBootstrapper,
   ],
-  exports: [LAWYER_AUTH, LAWYER_SESSION_READER, LAWYER_PASSWORD_HASHER, LAWYER_ACCOUNT_REPOSITORY],
+  exports: [
+    LAWYER_AUTH,
+    LAWYER_SESSION_READER,
+    LAWYER_PASSWORD_HASHER,
+    LAWYER_ACCOUNT_REPOSITORY,
+    LOGIN_THROTTLE_STORE,
+    LAWYER_LOGIN_THROTTLER,
+    LOGIN_CONCURRENCY_GATE,
+  ],
 })
 export class LawyerAuthModule {}

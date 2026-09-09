@@ -1,9 +1,41 @@
 import type { INestApplication } from '@nestjs/common';
-import { NotImplementedError } from '../../src/domain/not_implemented';
 import { DiscoveryService } from '@nestjs/core';
+import { Test, type TestingModule } from '@nestjs/testing';
+import { and, eq, sql } from 'drizzle-orm';
+import { AppModule } from '../../src/app.module';
 import { collect_route_access_inventory } from '../../src/auth/route_access_inventory';
 import type { RouteAccessDeclaration } from '../../src/auth/route_access';
-import type { Clock } from '../../src/shared/clock';
+import { CLOCK, SystemClock, type Clock } from '../../src/shared/clock';
+import { APPLICATION_ENVIRONMENT } from '../../src/config/configuration.module';
+import {
+  parse_application_environment,
+  type ApplicationEnvironment,
+} from '../../src/config/environment';
+import { APPLICATION_LOGGER } from '../../src/shared/logging/logging.module';
+import { APPLICATION_DATABASE } from '../../src/db/database.module';
+import type { ApplicationDatabase } from '../../src/db/database_connection';
+import { auth_account, auth_user } from '../../src/db/schema/auth_schema';
+import {
+  authentication_failure_by_ip,
+  lawyer_login_failure_by_account,
+  lawyer_login_failure_by_account_and_ip,
+} from '../../src/db/schema/security_schema';
+import {
+  LAWYER_ACCOUNT_REPOSITORY,
+  LAWYER_LOGIN_THROTTLER,
+} from '../../src/auth/lawyer_auth.module';
+import type { LawyerAccountRepository } from '../../src/auth/lawyer_account_bootstrap';
+import { LAWYER_AUTH, type LawyerAuth } from '../../src/auth/lawyer_auth';
+import { mount_lawyer_auth_handler } from '../../src/auth/mount_lawyer_auth';
+import type { LawyerLoginThrottler } from '../../src/auth/throttle_lawyer_login';
+import {
+  Argon2idLawyerPasswordHasher,
+  LAWYER_PASSWORD_HASHER,
+  type LawyerPasswordHasher,
+  type LawyerPasswordVerificationInput,
+} from '../../src/auth/lawyer_password_hasher';
+import { apply_http_hardening } from '../../src/shared/http_hardening';
+import type { ApplicationLogger } from '../../src/shared/logging/application_logger';
 
 export interface IntegrationTestApplication {
   app: INestApplication;
@@ -70,12 +102,117 @@ export function build_mutable_test_clock(initial_now: Date): MutableTestClock {
 
 export interface IntegrationTestApplicationOptions {
   clock?: Clock;
+  // Deux deploiements reels, deux comportements opposes, et les tests couvrent
+  // les deux. `0` est notre production : le 443 est en passthrough SNI, donc
+  // aucun proxy n'ajoute de X-Forwarded-For et l'en-tete recu ne peut venir que
+  // du client — on l'ignore. `1` decrit l'installation derriere notre Traefik,
+  // ou la derniere entree de la chaine est ecrite par un relais de confiance.
+  // Le defaut est le mode degrade : c'est celui ou la limitation doit tenir
+  // toute seule.
+  trusted_proxy_hop_count?: number;
 }
 
-export function create_integration_test_application(
-  _options?: IntegrationTestApplicationOptions,
+// Compte les appels reels au hachage. La verification en fait partie : c'est
+// elle qui coute, et c'est elle qu'un attaquant cherche a se faire offrir.
+class CountingLawyerPasswordHasher implements LawyerPasswordHasher {
+  private call_count = 0;
+
+  constructor(private readonly delegate: LawyerPasswordHasher) {}
+
+  read_call_count(): number {
+    return this.call_count;
+  }
+
+  async hash_plaintext_password(plaintext_password: string): Promise<string> {
+    this.call_count += 1;
+    return this.delegate.hash_plaintext_password(plaintext_password);
+  }
+
+  async verify_plaintext_password(
+    input: LawyerPasswordVerificationInput,
+  ): Promise<boolean> {
+    this.call_count += 1;
+    return this.delegate.verify_plaintext_password(input);
+  }
+}
+
+// Les compteurs de limitation vivent dans une base partagee par tous les
+// fichiers de test. Sans cette remise a zero, un bloc qui a volontairement
+// franchi le plafond par adresse ferait echouer le bloc suivant, et l'echec
+// designerait le mauvais coupable. Le compte de demonstration, lui, est
+// conserve : c'est l'amorcage de production qui le pose.
+async function reset_login_throttle_counters(database: ApplicationDatabase): Promise<void> {
+  await database.delete(authentication_failure_by_ip);
+  await database.delete(lawyer_login_failure_by_account);
+  await database.delete(lawyer_login_failure_by_account_and_ip);
+}
+
+export async function create_integration_test_application(
+  options?: IntegrationTestApplicationOptions,
 ): Promise<IntegrationTestApplication> {
-  throw new NotImplementedError('create_integration_test_application');
+  const counting_password_hasher = new CountingLawyerPasswordHasher(
+    new Argon2idLawyerPasswordHasher(),
+  );
+
+  const module: TestingModule = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(LAWYER_PASSWORD_HASHER)
+    .useValue(counting_password_hasher)
+    .overrideProvider(CLOCK)
+    .useValue(options?.clock ?? new SystemClock())
+    .overrideProvider(APPLICATION_ENVIRONMENT)
+    .useValue({
+      ...parse_application_environment(process.env),
+      trusted_proxy_hop_count: options?.trusted_proxy_hop_count ?? 0,
+    } satisfies ApplicationEnvironment)
+    .compile();
+
+  const app: INestApplication = module.createNestApplication({ logger: false });
+
+  // Meme ordre que dans main.ts, et pour les memes raisons : le durcissement
+  // avant tout, le montage de BetterAuth avant `init()` faute de quoi le
+  // routeur Nest repondrait 404 sur des chemins qu'aucun controleur ne declare.
+  // Un harnais qui monterait autrement testerait une application qui n'existe pas.
+  apply_http_hardening(
+    app.getHttpAdapter().getInstance(),
+    app.get<ApplicationEnvironment>(APPLICATION_ENVIRONMENT).node_environment,
+  );
+  mount_lawyer_auth_handler(app, {
+    lawyer_auth: app.get<LawyerAuth>(LAWYER_AUTH),
+    throttle_lawyer_login: app.get<LawyerLoginThrottler>(LAWYER_LOGIN_THROTTLER),
+    logger: app.get<ApplicationLogger>(APPLICATION_LOGGER),
+  });
+
+  await app.init();
+
+  const database: ApplicationDatabase = app.get(APPLICATION_DATABASE);
+  await reset_login_throttle_counters(database);
+
+  return {
+    app,
+    password_hashing_call_count: (): number => counting_password_hasher.read_call_count(),
+    read_stored_password_hash: async (email: string): Promise<string | null> => {
+      const rows = await database
+        .select({ password_hash: auth_account.password })
+        .from(auth_account)
+        .innerJoin(auth_user, eq(auth_account.userId, auth_user.id))
+        .where(
+          and(
+            eq(sql`lower(${auth_user.email})`, email.trim().toLowerCase()),
+            eq(auth_account.providerId, 'credential'),
+          ),
+        );
+
+      return rows[0]?.password_hash ?? null;
+    },
+    create_lawyer_account: async (input: {
+      email: string;
+      plaintext_password: string;
+    }): Promise<string> =>
+      app.get<LawyerAccountRepository>(LAWYER_ACCOUNT_REPOSITORY).create(input),
+    close: async (): Promise<void> => {
+      await app.close();
+    },
+  };
 }
 
 // Permet au test structurel de verifier les routes qu'on n'a PAS encore ecrites :

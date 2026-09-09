@@ -164,3 +164,63 @@ describe("mode degrade : quand l'adresse client est invisible", () => {
     expect(decide_login_throttle(everyone_shares_one_address).kind).not.toBe('refuse');
   });
 });
+
+// Decide le 2026-09-09, apres etre tombe dessus au cablage HTTP : la decision
+// ne regardait que le NOMBRE d'echecs, jamais le temps deja attendu. Un delai
+// annonce `Retry-After: 1` durait donc en realite jusqu'a la decroissance, une
+// heure plus tard. Trois fautes de frappe fermaient le poste de l'avocat pour
+// l'apres-midi, et l'en-tete qu'on lui renvoyait etait faux.
+describe('le backoff est une attente, pas un verrou : le temps deja ecoule compte', () => {
+  it("une fois le delai annonce ecoule, le couple (compte, adresse) est de nouveau evalue", () => {
+    const attempts_just_past_threshold: number =
+      LOGIN_BACKOFF_BOUNDS.attempts_before_backoff;
+    const announced_delay_seconds: number = LOGIN_BACKOFF_BOUNDS.initial_delay_seconds;
+
+    expect(
+      decide_login_throttle(
+        state_with({
+          account_ip_failed_attempts: attempts_just_past_threshold,
+          seconds_since_account_ip_last_failure: announced_delay_seconds,
+        }),
+      ),
+    ).toEqual<LoginThrottleOutcome>({ kind: 'allow' });
+  });
+
+  it("pendant le delai, le refus tient, et l'en-tete annonce le temps QUI RESTE", () => {
+    const outcome: LoginThrottleOutcome = decide_login_throttle(
+      state_with({
+        account_ip_failed_attempts: LOGIN_BACKOFF_BOUNDS.attempts_before_backoff + 4,
+        seconds_since_account_ip_last_failure: 6,
+      }),
+    );
+
+    if (outcome.kind !== 'refuse') {
+      throw new Error(`attendu un refus, recu ${outcome.kind}`);
+    }
+    // 2^4 = 16 secondes de backoff, dont 6 deja ecoulees.
+    expect(outcome.retry_after_seconds).toBe(10);
+  });
+
+  it('la couche par compte suit la meme regle : elle ne retarde plus une fois le delai passe', () => {
+    expect(
+      decide_login_throttle(
+        state_with({
+          account_failed_attempts: LOGIN_BACKOFF_BOUNDS.attempts_before_backoff + 2,
+          seconds_since_account_last_failure: LOGIN_BACKOFF_BOUNDS.max_delay_seconds,
+        }),
+      ),
+    ).toEqual<LoginThrottleOutcome>({ kind: 'allow' });
+  });
+
+  it("le plafond de delai reste un plafond d'ATTENTE : au-dela, la tentative repasse", () => {
+    expect(
+      decide_login_throttle(
+        state_with({
+          account_ip_failed_attempts: 5_000,
+          seconds_since_account_ip_last_failure:
+            LOGIN_BACKOFF_BOUNDS.max_delay_seconds + 1,
+        }),
+      ),
+    ).toEqual<LoginThrottleOutcome>({ kind: 'allow' });
+  });
+});

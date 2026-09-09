@@ -1,5 +1,5 @@
 {
-  "id": "ec82de32-a65a-404e-a66e-ee902998b1fd",
+  "id": "c1988041-79d4-4e1e-aae5-8e15f208f016",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -510,6 +510,78 @@
         "lawyer_login_failure_by_account_attempts_is_not_negative": {
           "name": "lawyer_login_failure_by_account_attempts_is_not_negative",
           "value": "\"security\".\"lawyer_login_failure_by_account\".\"consecutive_failed_attempts\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "security.lawyer_login_failure_by_account_and_ip": {
+      "name": "lawyer_login_failure_by_account_and_ip",
+      "schema": "security",
+      "columns": {
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_ip": {
+          "name": "client_ip",
+          "type": "inet",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consecutive_failed_attempts": {
+          "name": "consecutive_failed_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_failed_at": {
+          "name": "last_failed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "lawyer_login_failure_by_account_and_ip_last_failed_at_idx": {
+          "name": "lawyer_login_failure_by_account_and_ip_last_failed_at_idx",
+          "columns": [
+            {
+              "expression": "last_failed_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "lawyer_login_failure_by_account_and_ip_email_client_ip_pk": {
+          "name": "lawyer_login_failure_by_account_and_ip_email_client_ip_pk",
+          "columns": [
+            "email",
+            "client_ip"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "lawyer_login_failure_by_account_and_ip_email_is_normalized": {
+          "name": "lawyer_login_failure_by_account_and_ip_email_is_normalized",
+          "value": "\"security\".\"lawyer_login_failure_by_account_and_ip\".\"email\" = lower(\"security\".\"lawyer_login_failure_by_account_and_ip\".\"email\")\n        AND \"security\".\"lawyer_login_failure_by_account_and_ip\".\"email\" ~ '^[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+@[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+\\.[^@[:space:]\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]+$'\n        AND length(\"security\".\"lawyer_login_failure_by_account_and_ip\".\"email\") <= 254"
+        },
+        "lawyer_login_failure_by_account_and_ip_attempts_is_not_negative": {
+          "name": "lawyer_login_failure_by_account_and_ip_attempts_is_not_negative",
+          "value": "\"security\".\"lawyer_login_failure_by_account_and_ip\".\"consecutive_failed_attempts\" >= 0"
         }
       },
       "isRLSEnabled": false

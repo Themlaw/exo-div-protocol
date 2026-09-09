@@ -1,10 +1,19 @@
 {
   "rootDir": "..",
-  "roots": ["<rootDir>/test/integration"],
-  "moduleFileExtensions": ["js", "json", "ts"],
+  "roots": [
+    "<rootDir>/test/integration"
+  ],
+  "moduleFileExtensions": [
+    "js",
+    "json",
+    "ts"
+  ],
   "testRegex": ".*\\.spec\\.ts$",
-  "transform": { "^.+\\.(t|j)s$": "ts-jest" },
+  "transform": {
+    "^.+\\.(t|j)s$": "ts-jest"
+  },
   "testEnvironment": "node",
   "clearMocks": true,
-  "maxWorkers": 1
+  "maxWorkers": 1,
+  "testTimeout": 180000
 }

@@ -5,6 +5,7 @@ import { LoggingModule } from './shared/logging/logging.module';
 import { ClockModule } from './shared/clock.module';
 import { DatabaseModule } from './db/database.module';
 import { LawyerAuthModule } from './auth/lawyer_auth.module';
+import { DepositModule } from './deposit/deposit.module';
 import { HealthModule } from './health/health.module';
 import { InternalStorageModule } from './storage/internal_storage.module';
 import { RouteAccessStartupAudit } from './auth/route_access_startup_audit';
@@ -22,6 +23,7 @@ import { UnroutedRequestFilter } from './auth/unrouted_request.filter';
     ClockModule,
     DatabaseModule,
     LawyerAuthModule,
+    DepositModule,
     HealthModule,
     InternalStorageModule,
   ],

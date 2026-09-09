@@ -23,7 +23,6 @@ function build_lawyer_auth_for_inspection(): LawyerAuth {
       verify_plaintext_password: async (): Promise<boolean> => false,
     },
     public_base_url: 'http://localhost:3000',
-    node_environment: 'test',
     logger: { debug: (): void => {}, info: (): void => {}, warn: (): void => {}, error: (): void => {} },
     lawyer_auth_secret: 'z'.repeat(64),
   });
@@ -100,14 +99,14 @@ describe("la surface d'authentification reellement montee", () => {
   );
 
   it.each([
-    ['POST', '/api/auth/sign-up/email'],
-    ['POST', '/api/auth/delete-user'],
-    ['POST', '/api/auth/update-user'],
-    ['POST', '/api/auth/change-email'],
-    ['POST', '/api/auth/change-password'],
-    ['POST', '/api/auth/reset-password'],
-    ['POST', '/api/auth/revoke-sessions'],
-    ['GET', '/api/auth/list-sessions'],
+    ['POST', '/api/v1/auth/sign-up/email'],
+    ['POST', '/api/v1/auth/delete-user'],
+    ['POST', '/api/v1/auth/update-user'],
+    ['POST', '/api/v1/auth/change-email'],
+    ['POST', '/api/v1/auth/change-password'],
+    ['POST', '/api/v1/auth/reset-password'],
+    ['POST', '/api/v1/auth/revoke-sessions'],
+    ['GET', '/api/v1/auth/list-sessions'],
   ])(
     // Nommees une par une, en plus du balayage automatique : le balayage prouve
     // qu'aucune route de la bibliotheque ne passe, ces cas-ci disent lesquelles
@@ -120,12 +119,12 @@ describe("la surface d'authentification reellement montee", () => {
   );
 
   it(
-    "aucune route n'est servie par simple prefixe : un chemin inconnu sous /api/auth " +
+    "aucune route n'est servie par simple prefixe : un chemin inconnu sous /api/v1/auth " +
       "ne doit pas passer parce qu'il commence bien",
     () => {
-      expect(targets_mounted_lawyer_auth_route('POST', '/api/auth/sign-in/email/extra')).toBe(false);
-      expect(targets_mounted_lawyer_auth_route('POST', '/api/auth')).toBe(false);
-      expect(targets_mounted_lawyer_auth_route('GET', '/api/authentique')).toBe(false);
+      expect(targets_mounted_lawyer_auth_route('POST', '/api/v1/auth/sign-in/email/extra')).toBe(false);
+      expect(targets_mounted_lawyer_auth_route('POST', '/api/v1/auth')).toBe(false);
+      expect(targets_mounted_lawyer_auth_route('GET', '/api/v1/authentique')).toBe(false);
     },
   );
 
@@ -138,6 +137,6 @@ describe("la surface d'authentification reellement montee", () => {
     expect(
       targets_mounted_lawyer_auth_route('GET', `${LAWYER_AUTH_ROUTE_PATHS.session}?disableRefresh=true`),
     ).toBe(true);
-    expect(targets_mounted_lawyer_auth_route('POST', '/api/auth/delete-user?x=1')).toBe(false);
+    expect(targets_mounted_lawyer_auth_route('POST', '/api/v1/auth/delete-user?x=1')).toBe(false);
   });
 });

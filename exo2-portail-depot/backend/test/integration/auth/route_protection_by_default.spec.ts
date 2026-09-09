@@ -10,6 +10,7 @@ import {
 import type { RouteAccessKind } from '../../../src/auth/route_access';
 import { ENVIRONMENT_VARIABLE_NAMES } from '../../../src/config/environment';
 import {
+  DEPOSIT_REQUESTS_PATH,
   LAWYER_AUTH_ROUTE_PATHS,
   HEALTH_PATH,
   READINESS_PATH,
@@ -20,7 +21,7 @@ import {
 // Route avocat prise comme temoin : documentee dans api-routes.md, sans
 // parametre d'URL, donc la plus simple a interroger sans dependre d'un etat
 // metier prealable.
-const PROTECTED_LAWYER_ROUTE = '/requests';
+const PROTECTED_LAWYER_ROUTE = DEPOSIT_REQUESTS_PATH;
 
 // Liste blanche des routes qui n'ont pas a etre 'lawyer'. Elle est ecrite en
 // dur : toute route future qui n'y figure pas et qui n'est pas 'lawyer' fait
@@ -62,8 +63,8 @@ const VALID_ROUTE_ACCESS_KINDS: readonly RouteAccessKind[] = [
   'public_auth',
 ];
 
-// BetterAuth monte ses propres routes sous /api/auth/* (api-routes.md) : c'est
-// la seule indication documentee sur ou se connecter, /api/auth/sign-in/email
+// BetterAuth monte ses propres routes sous /api/v1/auth/* (api-routes.md) : c'est
+// la seule indication documentee sur ou se connecter, /api/v1/auth/sign-in/email
 // est sa convention par defaut pour email + mot de passe.
 async function authenticate_as_demo_lawyer(app: INestApplication): Promise<string> {
   const login_response = await request(app.getHttpServer())
@@ -146,7 +147,7 @@ describe('Protection des routes par defaut', () => {
   });
 });
 
-// [F6] BetterAuth se monte comme handler Node brut sous /api/auth/*, PAS comme
+// [F6] BetterAuth se monte comme handler Node brut sous /api/v1/auth/*, PAS comme
 // controleur Nest : ses routes n'apparaissent pas dans le routeur Nest, donc
 // ni dans collect_route_access_declarations, ni sous un APP_GUARD global. Le
 // defaut protecteur ne s'y applique pas, et l'outil cense le prouver ne voit
@@ -188,6 +189,6 @@ describe("[F6] la surface d'authentification echappe au recensement du routeur N
   });
 
   it("une requete sans session sur une route avocat quelconque reste refusee : le garde s'applique bien au-dela du routeur Nest", async () => {
-    await request(app.getHttpServer()).get('/api/requests').expect(401);
+    await request(app.getHttpServer()).get(DEPOSIT_REQUESTS_PATH).expect(401);
   });
 });

@@ -8,7 +8,10 @@ import {
   type IntegrationTestApplication,
   type RouteAccessDeclaration,
 } from '../../helpers/integration_application';
-import { LAWYER_AUTH_ROUTE_PATHS } from '../../../src/auth/auth_http_contract';
+import {
+  LAWYER_AUTH_ROUTE_PATHS,
+  LAWYER_SESSION_COOKIE_PATH,
+} from '../../../src/auth/auth_http_contract';
 
 const SIGN_IN_EMAIL_PATH = LAWYER_AUTH_ROUTE_PATHS.sign_in;
 const SIGN_OUT_PATH = LAWYER_AUTH_ROUTE_PATHS.sign_out;
@@ -114,10 +117,14 @@ describe('Session avocat : fixation, attributs de cookie, deconnexion, expiratio
   });
 
   it("[13] l'identifiant de session presente avant la connexion ne survit pas a la connexion : sans regeneration, un identifiant fourni a la victime avant qu'elle se connecte resterait valide apres, et l'attaquant qui l'a fourni entrerait dans le compte", async () => {
-    const attacker_supplied_session_cookie = 'better-auth.session_token=attacker-fixed-session-value';
+    const attacker_supplied_session_cookie = '__Secure-better-auth.session_token=attacker-fixed-session-value';
 
+    // Meme raison qu'a la deconnexion : des qu'un cookie accompagne la requete,
+    // BetterAuth exige un `Origin`. Sans lui la connexion repondait 403 et le
+    // test observait une absence de cookie qui ne prouvait rien.
     const login_response = await request(app.getHttpServer())
       .post(SIGN_IN_EMAIL_PATH)
+      .set('Origin', require_env('PUBLIC_BASE_URL'))
       .set('Cookie', attacker_supplied_session_cookie)
       .send({ email: demo_lawyer_email, password: demo_lawyer_password });
 
@@ -173,8 +180,7 @@ describe('Session avocat : fixation, attributs de cookie, deconnexion, expiratio
     ) as string;
 
     const path_attribute_value = cookie_attribute_value(session_cookie_header, 'Path');
-    expect(path_attribute_value).toBeDefined();
-    expect(path_attribute_value).not.toBe('/');
+    expect(path_attribute_value).toBe(LAWYER_SESSION_COOKIE_PATH);
   });
 
   it('[15] apres deconnexion, le cookie encore possede est refuse sur une route protegee : la session doit etre invalidee cote serveur, effacer le cookie cote client ne protege de rien puisque l\'attaquant a deja la valeur', async () => {
@@ -186,7 +192,15 @@ describe('Session avocat : fixation, attributs de cookie, deconnexion, expiratio
     ) as string;
     const session_cookie_value = cookie_name_and_value(session_cookie_header);
 
-    await request(app.getHttpServer()).post(SIGN_OUT_PATH).set('Cookie', session_cookie_value);
+    // `Origin` est obligatoire ici : BetterAuth protege la deconnexion contre le
+    // CSRF et repond 403 « Missing or null Origin » sans lui. Un navigateur en
+    // envoie toujours un sur une requete de meme origine — l'omettre testait
+    // une requete qu'aucun client reel n'emet, et la deconnexion n'avait donc
+    // jamais lieu.
+    await request(app.getHttpServer())
+      .post(SIGN_OUT_PATH)
+      .set('Origin', require_env('PUBLIC_BASE_URL'))
+      .set('Cookie', session_cookie_value);
 
     const response_after_logout = await request_protected_route(app, protected_lawyer_route).set(
       'Cookie',

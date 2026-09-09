@@ -20,6 +20,7 @@ import {
   lawyer_login_failure_by_account,
   lawyer_login_failure_by_account_and_ip,
 } from '../../src/db/schema/security_schema';
+import { deposit_request } from '../../src/db/schema/deposit_schema';
 import {
   LAWYER_ACCOUNT_REPOSITORY,
   LAWYER_LOGIN_THROTTLER,
@@ -35,6 +36,7 @@ import {
   type LawyerPasswordVerificationInput,
 } from '../../src/auth/lawyer_password_hasher';
 import { apply_http_hardening } from '../../src/shared/http_hardening';
+import { apply_api_route_prefix } from '../../src/shared/api_route_prefix';
 import type { ApplicationLogger } from '../../src/shared/logging/application_logger';
 
 export interface IntegrationTestApplication {
@@ -136,15 +138,20 @@ class CountingLawyerPasswordHasher implements LawyerPasswordHasher {
   }
 }
 
-// Les compteurs de limitation vivent dans une base partagee par tous les
-// fichiers de test. Sans cette remise a zero, un bloc qui a volontairement
-// franchi le plafond par adresse ferait echouer le bloc suivant, et l'echec
-// designerait le mauvais coupable. Le compte de demonstration, lui, est
-// conserve : c'est l'amorcage de production qui le pose.
-async function reset_login_throttle_counters(database: ApplicationDatabase): Promise<void> {
+// La base est partagee par tous les fichiers de test et survit d'une execution
+// a l'autre. Sans cette remise a zero, un bloc qui a volontairement franchi le
+// plafond par adresse ferait echouer le bloc suivant, et l'echec designerait le
+// mauvais coupable ; les demandes, elles, s'accumuleraient jusqu'a rendre toute
+// assertion sur une liste impossible a ecrire.
+//
+// Le compte de demonstration, lui, est conserve : c'est l'amorcage de
+// production qui le pose, et le detruire testerait une application qui n'existe
+// pas. Les documents attendus partent par la cascade de leur demande.
+async function reset_state_shared_between_tests(database: ApplicationDatabase): Promise<void> {
   await database.delete(authentication_failure_by_ip);
   await database.delete(lawyer_login_failure_by_account);
   await database.delete(lawyer_login_failure_by_account_and_ip);
+  await database.delete(deposit_request);
 }
 
 export async function create_integration_test_application(
@@ -176,6 +183,7 @@ export async function create_integration_test_application(
     app.getHttpAdapter().getInstance(),
     app.get<ApplicationEnvironment>(APPLICATION_ENVIRONMENT).node_environment,
   );
+  apply_api_route_prefix(app);
   mount_lawyer_auth_handler(app, {
     lawyer_auth: app.get<LawyerAuth>(LAWYER_AUTH),
     throttle_lawyer_login: app.get<LawyerLoginThrottler>(LAWYER_LOGIN_THROTTLER),
@@ -185,7 +193,7 @@ export async function create_integration_test_application(
   await app.init();
 
   const database: ApplicationDatabase = app.get(APPLICATION_DATABASE);
-  await reset_login_throttle_counters(database);
+  await reset_state_shared_between_tests(database);
 
   return {
     app,

@@ -99,16 +99,15 @@ export class DemoLawyerAccountBootstrapper implements OnModuleInit {
           database,
           password_hasher,
           public_base_url: environment.public_base_url,
-          node_environment: environment.node_environment,
           logger,
           lawyer_auth_secret: environment.lawyer_auth_secret,
         }),
     },
     {
       provide: LAWYER_SESSION_READER,
-      inject: [LAWYER_AUTH],
-      useFactory: (lawyer_auth: LawyerAuth): LawyerSessionReader =>
-        new BetterAuthLawyerSessionReader(lawyer_auth),
+      inject: [LAWYER_AUTH, CLOCK],
+      useFactory: (lawyer_auth: LawyerAuth, clock: Clock): LawyerSessionReader =>
+        new BetterAuthLawyerSessionReader(lawyer_auth, clock),
     },
     {
       provide: LAWYER_ACCOUNT_REPOSITORY,

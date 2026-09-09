@@ -95,12 +95,12 @@ describe('migrations de base de donnees', () => {
     const inspection_sql = postgres(disposable_database_url, { max: 1 });
     try {
       const schema_rows = await inspection_sql<{ nspname: string }[]>`
-        SELECT nspname FROM pg_namespace WHERE nspname IN ('auth', 'security', 'drizzle')
+        SELECT nspname FROM pg_namespace WHERE nspname IN ('auth', 'deposit', 'security', 'drizzle')
         ORDER BY nspname
       `;
       const table_rows = await inspection_sql<{ schemaname: string; tablename: string }[]>`
         SELECT schemaname, tablename FROM pg_tables
-        WHERE schemaname IN ('auth', 'security') ORDER BY schemaname, tablename
+        WHERE schemaname IN ('auth', 'deposit', 'security') ORDER BY schemaname, tablename
       `;
       return {
         schemas: schema_rows.map((row) => row.nspname),
@@ -123,12 +123,14 @@ describe('migrations de base de donnees', () => {
     await run_database_migrations(database);
 
     const { schemas, tables } = await read_object_names();
-    expect(schemas).toEqual(['auth', 'drizzle', 'security']);
+    expect(schemas).toEqual(['auth', 'deposit', 'drizzle', 'security']);
     expect(tables).toEqual([
       'auth.account',
       'auth.session',
       'auth.user',
       'auth.verification',
+      'deposit.deposit_request',
+      'deposit.expected_document',
       'security.authentication_failure_by_ip',
       'security.lawyer_login_failure_by_account',
       'security.lawyer_login_failure_by_account_and_ip',
@@ -183,7 +185,7 @@ describe('migrations de base de donnees', () => {
     expect(rejected).toEqual([]);
 
     const { tables } = await read_object_names();
-    expect(tables).toHaveLength(7);
+    expect(tables).toHaveLength(9);
   });
 
   it('quatre demarrages simultanes n appliquent quand meme chaque migration une seule fois', async () => {

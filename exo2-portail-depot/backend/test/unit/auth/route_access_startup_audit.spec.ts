@@ -72,9 +72,9 @@ describe('RouteAccessStartupAudit', () => {
     // recensement que de reunir les deux surfaces en une seule liste relisible.
     expect(entries[0]!.fields?.routes_open_beyond_the_default).toEqual([
       'GET /health (health)',
-      'POST /api/auth/sign-in/email (public_auth)',
-      'POST /api/auth/sign-out (public_auth)',
-      'GET /api/auth/get-session (public_auth)',
+      'POST /api/v1/auth/sign-in/email (public_auth)',
+      'POST /api/v1/auth/sign-out (public_auth)',
+      'GET /api/v1/auth/get-session (public_auth)',
     ]);
   });
 
@@ -103,7 +103,7 @@ describe('RouteAccessStartupAudit', () => {
     const named_routes = logger.entries_at_level('info')[0]!.fields
       ?.routes_open_beyond_the_default as readonly string[];
 
-    expect(named_routes).not.toContain('GET /requests (lawyer)');
+    expect(named_routes).not.toContain('GET /api/v1/requests (lawyer)');
     expect(named_routes.some((route: string): boolean => route.includes('/requests'))).toBe(false);
   });
 });

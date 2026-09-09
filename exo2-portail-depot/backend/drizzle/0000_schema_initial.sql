@@ -2,7 +2,10 @@ CREATE SCHEMA "auth";
 --> statement-breakpoint
 CREATE SCHEMA "security";
 --> statement-breakpoint
+CREATE SCHEMA "deposit";
+--> statement-breakpoint
 CREATE TYPE "security"."authentication_failure_kind" AS ENUM('lawyer_login', 'client_pin');--> statement-breakpoint
+CREATE TYPE "deposit"."deposit_request_status" AS ENUM('incomplete', 'processing', 'validated', 'blocked', 'expired_incomplete');--> statement-breakpoint
 CREATE TABLE "auth"."account" (
 	"id" text PRIMARY KEY NOT NULL,
 	"userId" text NOT NULL,
@@ -83,12 +86,46 @@ CREATE TABLE "security"."lawyer_login_failure_by_account_and_ip" (
 	CONSTRAINT "lawyer_login_failure_by_account_and_ip_attempts_is_not_negative" CHECK ("security"."lawyer_login_failure_by_account_and_ip"."consecutive_failed_attempts" >= 0)
 );
 --> statement-breakpoint
+CREATE TABLE "deposit"."deposit_request" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"owner_user_id" text NOT NULL,
+	"title" text NOT NULL,
+	"status" "deposit"."deposit_request_status" DEFAULT 'incomplete' NOT NULL,
+	"max_pin_attempts" integer NOT NULL,
+	"link_lifetime_days" integer NOT NULL,
+	"pin_length" integer NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "deposit_request_security_policy_within_bounds" CHECK ("deposit"."deposit_request"."max_pin_attempts" BETWEEN 5 AND 20
+        AND "deposit"."deposit_request"."link_lifetime_days" BETWEEN 1 AND 14
+        AND "deposit"."deposit_request"."pin_length" BETWEEN 4 AND 12),
+	CONSTRAINT "deposit_request_title_is_not_blank" CHECK (btrim("deposit"."deposit_request"."title") <> '')
+);
+--> statement-breakpoint
+CREATE TABLE "deposit"."expected_document" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"deposit_request_id" uuid NOT NULL,
+	"label" text NOT NULL,
+	"position" integer NOT NULL,
+	"allowed_mime_types" text[] NOT NULL,
+	"max_size_bytes" integer NOT NULL,
+	CONSTRAINT "expected_document_label_is_not_blank" CHECK (btrim("deposit"."expected_document"."label") <> ''),
+	CONSTRAINT "expected_document_position_is_not_negative" CHECK ("deposit"."expected_document"."position" >= 0),
+	CONSTRAINT "expected_document_allowed_mime_types_is_not_empty" CHECK (array_length("deposit"."expected_document"."allowed_mime_types", 1) >= 1),
+	CONSTRAINT "expected_document_max_size_within_bounds" CHECK ("deposit"."expected_document"."max_size_bytes" BETWEEN 1024 AND 20971520)
+);
+--> statement-breakpoint
 ALTER TABLE "auth"."account" ADD CONSTRAINT "account_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "auth"."session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "deposit"."deposit_request" ADD CONSTRAINT "deposit_request_owner_user_id_user_id_fk" FOREIGN KEY ("owner_user_id") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "deposit"."expected_document" ADD CONSTRAINT "expected_document_deposit_request_id_deposit_request_id_fk" FOREIGN KEY ("deposit_request_id") REFERENCES "deposit"."deposit_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "account_user_id_idx" ON "auth"."account" USING btree ("userId");--> statement-breakpoint
 CREATE UNIQUE INDEX "account_provider_id_account_id_key" ON "auth"."account" USING btree ("providerId","accountId");--> statement-breakpoint
 CREATE INDEX "session_user_id_idx" ON "auth"."session" USING btree ("userId");--> statement-breakpoint
 CREATE INDEX "verification_identifier_idx" ON "auth"."verification" USING btree ("identifier");--> statement-breakpoint
 CREATE INDEX "authentication_failure_by_ip_window_idx" ON "security"."authentication_failure_by_ip" USING btree ("client_ip","failure_kind","occurred_at");--> statement-breakpoint
 CREATE INDEX "authentication_failure_by_ip_occurred_at_idx" ON "security"."authentication_failure_by_ip" USING btree ("occurred_at");--> statement-breakpoint
-CREATE INDEX "lawyer_login_failure_by_account_and_ip_last_failed_at_idx" ON "security"."lawyer_login_failure_by_account_and_ip" USING btree ("last_failed_at");
+CREATE INDEX "lawyer_login_failure_by_account_and_ip_last_failed_at_idx" ON "security"."lawyer_login_failure_by_account_and_ip" USING btree ("last_failed_at");--> statement-breakpoint
+CREATE INDEX "deposit_request_owner_user_id_idx" ON "deposit"."deposit_request" USING btree ("owner_user_id","created_at");--> statement-breakpoint
+CREATE INDEX "expected_document_deposit_request_id_idx" ON "deposit"."expected_document" USING btree ("deposit_request_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "expected_document_position_within_request_idx" ON "deposit"."expected_document" USING btree ("deposit_request_id","position");

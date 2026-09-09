@@ -1,5 +1,5 @@
 {
-  "id": "c1988041-79d4-4e1e-aae5-8e15f208f016",
+  "id": "c8f2e1dc-5175-4da2-9924-02baf4c4b587",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -585,6 +585,243 @@
         }
       },
       "isRLSEnabled": false
+    },
+    "deposit.deposit_request": {
+      "name": "deposit_request",
+      "schema": "deposit",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "owner_user_id": {
+          "name": "owner_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "deposit_request_status",
+          "typeSchema": "deposit",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'incomplete'"
+        },
+        "max_pin_attempts": {
+          "name": "max_pin_attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "link_lifetime_days": {
+          "name": "link_lifetime_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pin_length": {
+          "name": "pin_length",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "deposit_request_owner_user_id_idx": {
+          "name": "deposit_request_owner_user_id_idx",
+          "columns": [
+            {
+              "expression": "owner_user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "deposit_request_owner_user_id_user_id_fk": {
+          "name": "deposit_request_owner_user_id_user_id_fk",
+          "tableFrom": "deposit_request",
+          "tableTo": "user",
+          "schemaTo": "auth",
+          "columnsFrom": [
+            "owner_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "deposit_request_security_policy_within_bounds": {
+          "name": "deposit_request_security_policy_within_bounds",
+          "value": "\"deposit\".\"deposit_request\".\"max_pin_attempts\" BETWEEN 5 AND 20\n        AND \"deposit\".\"deposit_request\".\"link_lifetime_days\" BETWEEN 1 AND 14\n        AND \"deposit\".\"deposit_request\".\"pin_length\" BETWEEN 4 AND 12"
+        },
+        "deposit_request_title_is_not_blank": {
+          "name": "deposit_request_title_is_not_blank",
+          "value": "btrim(\"deposit\".\"deposit_request\".\"title\") <> ''"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "deposit.expected_document": {
+      "name": "expected_document",
+      "schema": "deposit",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "deposit_request_id": {
+          "name": "deposit_request_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "allowed_mime_types": {
+          "name": "allowed_mime_types",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "max_size_bytes": {
+          "name": "max_size_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "expected_document_deposit_request_id_idx": {
+          "name": "expected_document_deposit_request_id_idx",
+          "columns": [
+            {
+              "expression": "deposit_request_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "expected_document_position_within_request_idx": {
+          "name": "expected_document_position_within_request_idx",
+          "columns": [
+            {
+              "expression": "deposit_request_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "position",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "expected_document_deposit_request_id_deposit_request_id_fk": {
+          "name": "expected_document_deposit_request_id_deposit_request_id_fk",
+          "tableFrom": "expected_document",
+          "tableTo": "deposit_request",
+          "schemaTo": "deposit",
+          "columnsFrom": [
+            "deposit_request_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "expected_document_label_is_not_blank": {
+          "name": "expected_document_label_is_not_blank",
+          "value": "btrim(\"deposit\".\"expected_document\".\"label\") <> ''"
+        },
+        "expected_document_position_is_not_negative": {
+          "name": "expected_document_position_is_not_negative",
+          "value": "\"deposit\".\"expected_document\".\"position\" >= 0"
+        },
+        "expected_document_allowed_mime_types_is_not_empty": {
+          "name": "expected_document_allowed_mime_types_is_not_empty",
+          "value": "array_length(\"deposit\".\"expected_document\".\"allowed_mime_types\", 1) >= 1"
+        },
+        "expected_document_max_size_within_bounds": {
+          "name": "expected_document_max_size_within_bounds",
+          "value": "\"deposit\".\"expected_document\".\"max_size_bytes\" BETWEEN 1024 AND 20971520"
+        }
+      },
+      "isRLSEnabled": false
     }
   },
   "enums": {
@@ -595,11 +832,23 @@
         "lawyer_login",
         "client_pin"
       ]
+    },
+    "deposit.deposit_request_status": {
+      "name": "deposit_request_status",
+      "schema": "deposit",
+      "values": [
+        "incomplete",
+        "processing",
+        "validated",
+        "blocked",
+        "expired_incomplete"
+      ]
     }
   },
   "schemas": {
     "auth": "auth",
-    "security": "security"
+    "security": "security",
+    "deposit": "deposit"
   },
   "sequences": {},
   "roles": {},

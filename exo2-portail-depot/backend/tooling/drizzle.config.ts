@@ -12,7 +12,7 @@ export default defineConfig({
   // Sans ce filtre, drizzle-kit considererait `public` comme etant sous sa
   // responsabilite et proposerait de supprimer les tables de graphile-worker,
   // qui cree les siennes hors de toute migration.
-  schemaFilter: ['auth', 'security'],
+  schemaFilter: ['auth', 'security', 'deposit'],
   dbCredentials: {
     url: process.env.DATABASE_URL ?? '',
   },

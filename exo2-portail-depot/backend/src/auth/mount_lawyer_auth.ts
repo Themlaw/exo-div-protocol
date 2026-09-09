@@ -20,11 +20,15 @@ export type RequestBodyViolation = 'too_large' | 'length_required';
 
 export type RequestHeadersView = Readonly<Record<string, string | string[] | undefined>>;
 
-// Refus sur `content-length`, plus refus de toute requete a corps qui n'en
-// declare pas : sans cette seconde regle, l'encodage par morceaux contournerait
-// le plafond en n'annoncant simplement aucune taille. Le montage se fait en
-// amont du routeur Nest, donc avant tout analyseur de corps, et better-call ne
-// plafonne rien de son cote.
+// Refus sur `content-length`, plus refus de toute requete qui ANNONCE un corps
+// sans en declarer la taille : sans cette seconde regle, l'encodage par
+// morceaux contournerait le plafond en n'annoncant simplement aucune taille. Le
+// montage se fait en amont du routeur Nest, donc avant tout analyseur de corps,
+// et better-call ne plafonne rien de son cote.
+//
+// Une requete qui n'annonce NI longueur NI encodage n'a pas de corps du tout, et
+// se laisse passer : `POST /api/v1/auth/sign-out` est exactement de cette forme.
+// L'avoir refusee valait une deconnexion qui n'invalidait rien.
 export function find_oversized_request_body_violation(
   http_method: string,
   headers: RequestHeadersView,
@@ -34,6 +38,16 @@ export function find_oversized_request_body_violation(
   }
 
   const declared_length: string | string[] | undefined = headers['content-length'];
+
+  // Rien d'annonce, ni longueur ni encodage : il n'y a pas de corps, donc rien
+  // a plafonner.
+  if (declared_length === undefined && headers['transfer-encoding'] === undefined) {
+    return null;
+  }
+
+  // Un corps EST annonce. Une longueur illisible n'est alors pas une longueur
+  // absente : c'est une declaration qu'on ne peut pas verifier, et la laisser
+  // passer reviendrait a lire un flux sans plafond.
   if (typeof declared_length !== 'string' || !/^\d+$/.test(declared_length)) {
     return 'length_required';
   }

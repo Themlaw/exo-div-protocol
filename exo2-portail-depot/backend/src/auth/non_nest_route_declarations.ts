@@ -1,4 +1,4 @@
-import { LAWYER_AUTH_ROUTE_PATHS } from './auth_http_contract';
+import { API_ROUTE_PREFIX, LAWYER_AUTH_ROUTE_PATHS } from './auth_http_contract';
 import type { RouteAccessDeclaration } from './route_access';
 
 // BetterAuth se monte comme handler Node sous un prefixe : ses routes ne
@@ -6,12 +6,12 @@ import type { RouteAccessDeclaration } from './route_access';
 // recensement qui sert a prouver que rien n'est ouvert par omission. Un outil
 // qui ne voit pas une surface ne peut pas la declarer sure : on la declare
 // donc a la main, ici, et le recensement fusionne les deux sources.
-export const LAWYER_AUTH_MOUNT_PATH = '/api/auth';
+export const LAWYER_AUTH_MOUNT_PATH = `${API_ROUTE_PREFIX}/auth`;
 
 // Cette liste n'est pas qu'une declaration : c'est aussi la LISTE BLANCHE que
 // l'intergiciel de montage applique. Les deux ne peuvent donc pas diverger.
 //
-// Pourquoi une liste blanche plutot qu'un joker `/api/auth/*` : la version
+// Pourquoi une liste blanche plutot qu'un joker `/api/v1/auth/*` : la version
 // installee expose 30 points d'entree sous ce prefixe — `delete-user`,
 // `update-user`, `change-email`, `change-password`, `reset-password`,
 // `revoke-sessions`, `sign-up/email`... Aucun n'a d'usage dans ce produit, et

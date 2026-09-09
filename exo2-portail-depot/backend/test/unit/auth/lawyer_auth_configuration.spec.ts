@@ -11,7 +11,6 @@ function build_auth_options(): Record<string, unknown> {
       verify_plaintext_password: async (): Promise<boolean> => false,
     },
     public_base_url: 'https://portail.fr',
-    node_environment: 'production',
     logger: build_capturing_logger(),
     lawyer_auth_secret: LAWYER_AUTH_SECRET,
   });

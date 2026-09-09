@@ -13,7 +13,7 @@ import {
 } from '../../../src/auth/login_throttling';
 import { LAWYER_AUTH_ROUTE_PATHS } from '../../../src/auth/auth_http_contract';
 
-// BetterAuth monte ses propres routes sous /api/auth/* : il n'existe pas de
+// BetterAuth monte ses propres routes sous /api/v1/auth/* : il n'existe pas de
 // POST /auth/login maison (voir memories/api-routes.md, ecart 2).
 const LOGIN_PATH = LAWYER_AUTH_ROUTE_PATHS.sign_in;
 

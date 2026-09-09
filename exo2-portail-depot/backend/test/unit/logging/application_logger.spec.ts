@@ -68,11 +68,11 @@ describe('redact_log_fields', () => {
 
   it('le masquage descend dans les objets imbriques : un secret ne se cache pas en profondeur', () => {
     const redacted = redact_log_fields({
-      request: { headers: { authorization: 'Bearer tres-secret' }, path: '/api/auth' },
+      request: { headers: { authorization: 'Bearer tres-secret' }, path: '/api/v1/auth' },
     });
 
     expect(JSON.stringify(redacted)).not.toContain('tres-secret');
-    expect(JSON.stringify(redacted)).toContain('/api/auth');
+    expect(JSON.stringify(redacted)).toContain('/api/v1/auth');
   });
 
   it('le masquage traverse les tableaux', () => {

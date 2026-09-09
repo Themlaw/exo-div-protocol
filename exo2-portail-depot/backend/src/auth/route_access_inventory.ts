@@ -2,6 +2,7 @@ import { PATH_METADATA, METHOD_METADATA } from '@nestjs/common/constants';
 import { RequestMethod } from '@nestjs/common';
 import { DiscoveryService, MetadataScanner } from '@nestjs/core';
 import { NON_NEST_ROUTE_ACCESS_DECLARATIONS } from './non_nest_route_declarations';
+import { resolve_served_route_path } from './auth_http_contract';
 import {
   read_own_route_access_kinds,
   resolve_route_access_kind,
@@ -66,7 +67,12 @@ export function collect_route_access_inventory(
 
       declarations.push({
         http_method: HTTP_METHOD_BY_REQUEST_METHOD[request_method] ?? 'UNKNOWN',
-        path: join_route_segments(controller_path, read_metadata_string(handler, PATH_METADATA)),
+        // Le chemin REELLEMENT servi, prefixe versionne compris : les
+        // decorateurs ne portent que la partie propre au controleur, et un
+        // recensement qui s'arreterait la nommerait des routes inexistantes.
+        path: resolve_served_route_path(
+          join_route_segments(controller_path, read_metadata_string(handler, PATH_METADATA)),
+        ),
         // Les metadonnees PROPRES des deux cibles, jamais celles heritees : un
         // controleur qui herite d'une classe decoree ne doit pas recuperer son
         // acces sans porter aucun decorateur.

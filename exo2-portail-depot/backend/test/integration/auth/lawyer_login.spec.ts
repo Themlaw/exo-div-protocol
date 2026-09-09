@@ -8,7 +8,7 @@ import {
 } from '../../helpers/integration_application';
 import { LAWYER_AUTH_ROUTE_PATHS } from '../../../src/auth/auth_http_contract';
 
-// BetterAuth est monte sous /api/auth/* ; on ne passe que par HTTP, jamais par
+// BetterAuth est monte sous /api/v1/auth/* ; on ne passe que par HTTP, jamais par
 // un symbole de la librairie, puisque c'est le seul contrat observable.
 const SIGN_IN_EMAIL_PATH = LAWYER_AUTH_ROUTE_PATHS.sign_in;
 
@@ -34,7 +34,7 @@ function serialize_response_for_leak_search(response: request.Response): string 
   return JSON.stringify({ body: response.body, headers: response.headers });
 }
 
-describe('POST /api/auth/sign-in/email', () => {
+describe('POST /api/v1/auth/sign-in/email', () => {
   let integration_test_application: IntegrationTestApplication | undefined;
   let app: INestApplication;
   let demo_lawyer_email: string;

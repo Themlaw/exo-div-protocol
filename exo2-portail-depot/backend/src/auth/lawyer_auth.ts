@@ -8,8 +8,8 @@ import {
   auth_verification,
 } from '../db/schema/auth_schema';
 import { LAWYER_PASSWORD_LENGTH_BOUNDS } from '../shared/lawyer_credentials';
-import type { NodeEnvironment } from '../shared/node_environment';
 import { LAWYER_AUTH_MOUNT_PATH } from './non_nest_route_declarations';
+import { LAWYER_SESSION_COOKIE_PATH } from './auth_http_contract';
 import type { LawyerPasswordHasher } from './lawyer_password_hasher';
 import { build_lawyer_auth_logger } from './lawyer_auth_logging';
 import type { ApplicationLogger } from '../shared/logging/application_logger';
@@ -26,7 +26,6 @@ export interface LawyerAuthDependencies {
   database: ApplicationDatabase;
   password_hasher: LawyerPasswordHasher;
   public_base_url: string;
-  node_environment: NodeEnvironment;
   logger: ApplicationLogger;
   lawyer_auth_secret: string;
 }
@@ -121,9 +120,22 @@ export function build_lawyer_auth(dependencies: LawyerAuthDependencies) {
       },
     },
     advanced: {
-      // En developpement l'application tourne en http : exiger un cookie
-      // `Secure` y rendrait la connexion impossible.
-      useSecureCookies: dependencies.node_environment === 'production',
+      // Toujours, y compris en developpement : les navigateurs traitent
+      // `http://localhost` comme une origine sure et acceptent un cookie
+      // `Secure` dessus. Le conditionner a l'environnement faisait qu'on ne
+      // testait jamais le cookie reellement servi en production, et un cookie
+      // de session qui transite en clair une seule fois est un cookie perdu.
+      useSecureCookies: true,
+      cookies: {
+        session_token: {
+          attributes: {
+            // La bibliotheque pose `Path=/`, donc le cookie de session part
+            // avec CHAQUE requete du domaine — assets du front compris. Le
+            // restreindre a `/api` le reserve aux appels qui en ont besoin.
+            path: LAWYER_SESSION_COOKIE_PATH,
+          },
+        },
+      },
     },
   });
 }

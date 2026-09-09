@@ -4,6 +4,7 @@ import { APPLICATION_ENVIRONMENT } from './config/configuration.module';
 import type { ApplicationEnvironment } from './config/environment';
 import { APPLICATION_LOGGER } from './shared/logging/logging.module';
 import { apply_http_hardening } from './shared/http_hardening';
+import { apply_api_route_prefix } from './shared/api_route_prefix';
 import { describe_startup_failure } from './shared/startup_failure_report';
 import { mount_lawyer_auth_handler } from './auth/mount_lawyer_auth';
 import { LAWYER_AUTH, type LawyerAuth } from './auth/lawyer_auth';
@@ -33,10 +34,12 @@ async function bootstrap(): Promise<void> {
 
   apply_http_hardening(app.getHttpAdapter().getInstance(), environment.node_environment);
 
+  apply_api_route_prefix(app);
+
   const logger: ApplicationLogger = app.get(APPLICATION_LOGGER);
 
   // Avant `listen`, donc avant que le routeur Nest ne soit en place : c'est
-  // lui qui repondrait 404 sur /api/auth, ces chemins n'ayant aucun controleur.
+  // lui qui repondrait 404 sur /api/v1/auth, ces chemins n'ayant aucun controleur.
   mount_lawyer_auth_handler(app, {
     lawyer_auth: app.get<LawyerAuth>(LAWYER_AUTH),
     throttle_lawyer_login: app.get<LawyerLoginThrottler>(LAWYER_LOGIN_THROTTLER),

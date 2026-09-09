@@ -5,6 +5,7 @@ import { LoggingModule } from './shared/logging/logging.module';
 import { ClockModule } from './shared/clock.module';
 import { Argon2ConcurrencyModule } from './shared/argon2_concurrency.module';
 import { AccessLinkModule } from './access_link/access_link.module';
+import { DepositSessionModule } from './deposit_session/deposit_session.module';
 import { DatabaseModule } from './db/database.module';
 import { LawyerAuthModule } from './auth/lawyer_auth.module';
 import { DepositModule } from './deposit/deposit.module';
@@ -25,6 +26,7 @@ import { UnroutedRequestFilter } from './auth/unrouted_request.filter';
     ClockModule,
     Argon2ConcurrencyModule,
     AccessLinkModule,
+    DepositSessionModule,
     DatabaseModule,
     LawyerAuthModule,
     DepositModule,

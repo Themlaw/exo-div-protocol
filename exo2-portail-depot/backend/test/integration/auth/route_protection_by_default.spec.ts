@@ -16,6 +16,7 @@ import {
   READINESS_PATH,
   METRICS_PATH,
   INTERNAL_STORAGE_EVENTS_PATH,
+  PUBLIC_DEPOSIT_PATH,
 } from '../../../src/auth/auth_http_contract';
 
 // Route avocat prise comme temoin : documentee dans api-routes.md, sans
@@ -40,9 +41,9 @@ const NON_LAWYER_ROUTE_WHITELIST: ReadonlyArray<
   // implicite que ce test pretend interdire. Ajouter une route ouverte doit
   // rester un ajout relu, ligne par ligne.
   (declaration) =>
-    declaration.http_method === 'GET' && declaration.path === '/public/:token',
+    declaration.http_method === 'GET' && declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token`,
   (declaration) =>
-    declaration.http_method === 'POST' && declaration.path === '/public/:token/unlock',
+    declaration.http_method === 'POST' && declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token/unlock`,
   // [F6] La surface d'authentification, declaree a la main parce qu'elle
   // echappe au routeur Nest. Trois chemins EXACTS et rien de plus : la
   // bibliotheque en expose une trentaine sous le meme prefixe, et le montage

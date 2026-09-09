@@ -43,6 +43,11 @@ export const LAWYER_AUTH_ROUTE_PATHS = {
 
 export const DEPOSIT_REQUESTS_PATH = `${API_ROUTE_PREFIX}/requests`;
 
+// La surface anonyme du produit. Le cookie de session de depot y est confine :
+// il n'accompagne aucune route avocat.
+export const PUBLIC_DEPOSIT_PATH = `${API_ROUTE_PREFIX}/public`;
+export const DEPOSIT_SESSION_COOKIE_NAME = 'deposit_session';
+
 // Volontairement `/api` et non `/api/v1` : le cookie doit accompagner toutes
 // les versions servies, et la restriction utile est ailleurs — le front, servi
 // sur le meme domaine, ne recoit plus le cookie de session avec ses assets.

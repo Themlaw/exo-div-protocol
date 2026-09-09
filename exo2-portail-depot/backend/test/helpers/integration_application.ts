@@ -162,6 +162,7 @@ async function reset_state_shared_between_tests(database: ApplicationDatabase): 
   await database.delete(lawyer_login_failure_by_account);
   await database.delete(lawyer_login_failure_by_account_and_ip);
   await database.delete(deposit_request);
+  // Les liens et les sessions partent par la cascade de leur demande.
 }
 
 export async function create_integration_test_application(

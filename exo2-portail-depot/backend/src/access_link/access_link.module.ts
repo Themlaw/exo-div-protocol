@@ -90,6 +90,7 @@ import type { RandomSource } from '../domain/presigned_upload';
     ACCESS_LINK_TOKEN_HASHER,
     CLIENT_PIN_HASHER,
     ACCESS_LINK_ISSUER,
+    RANDOM_SOURCE,
   ],
 })
 export class AccessLinkModule {}

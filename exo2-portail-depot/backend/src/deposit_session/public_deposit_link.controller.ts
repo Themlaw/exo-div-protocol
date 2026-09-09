@@ -1,0 +1,161 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Inject,
+  Param,
+  Post,
+  Req,
+  Res,
+} from '@nestjs/common';
+import { ClientLinkRoute } from '../auth/route_access';
+import {
+  DEPOSIT_SESSION_COOKIE_NAME,
+  PUBLIC_DEPOSIT_PATH,
+} from '../auth/auth_http_contract';
+import { APPLICATION_ENVIRONMENT } from '../config/configuration.module';
+import type { ApplicationEnvironment } from '../config/environment';
+import { CLOCK, type Clock } from '../shared/clock';
+import { resolve_trusted_client_ip } from '../auth/login_throttling';
+import { read_forwarded_for_chain } from '../auth/throttle_lawyer_login';
+import {
+  ACCESS_LINK_REPOSITORY,
+  type AccessLinkRepository,
+} from '../access_link/access_link_repository';
+import {
+  ACCESS_LINK_TOKEN_HASHER,
+  type AccessLinkTokenHasher,
+} from '../access_link/access_link_token_hasher';
+import { resolve_public_access_link_state, type PublicAccessLinkState } from '../domain/access_link';
+import {
+  CLIENT_DEPOSIT_SESSION_LIFETIME_SECONDS,
+  DEPOSIT_LINK_UNLOCKER,
+  type DepositLinkUnlockOutcome,
+  type DepositLinkUnlocker,
+} from './unlock_deposit_link';
+import { CLIENT_PIN_IP_RATE_LIMIT_BOUNDS } from './client_pin_throttle_store';
+
+// Ce que le client anonyme a le droit de savoir AVANT le PIN : l'etat, et la
+// longueur du code pour dessiner la saisie. Ni titre, ni nombre de pieces, ni
+// nom de dossier — la longueur, elle, est deja sous les yeux du destinataire
+// legitime dans le message qu'il a recu.
+interface PublicAccessLinkView {
+  state: PublicAccessLinkState;
+  pin_length?: number;
+}
+
+// Le corps du refus, IDENTIQUE pour toutes les causes : token inconnu, lien
+// expire, lien revoque, PIN faux, PIN de mauvaise longueur. Distinguer
+// reviendrait a repondre « ce token existe » a qui en essaie au hasard.
+const GENERIC_REFUSAL_BODY = { state: 'invalid' } as const;
+
+@Controller('public')
+@ClientLinkRoute()
+export class PublicDepositLinkController {
+  constructor(
+    @Inject(ACCESS_LINK_REPOSITORY) private readonly access_links: AccessLinkRepository,
+    @Inject(ACCESS_LINK_TOKEN_HASHER) private readonly token_hasher: AccessLinkTokenHasher,
+    @Inject(DEPOSIT_LINK_UNLOCKER) private readonly unlocker: DepositLinkUnlocker,
+    @Inject(APPLICATION_ENVIRONMENT) private readonly environment: ApplicationEnvironment,
+    @Inject(CLOCK) private readonly clock: Clock,
+  ) {}
+
+  @Get(':token')
+  async read_public_link_state(@Param('token') token: string): Promise<PublicAccessLinkView> {
+    const { token_hmac } = this.token_hasher.fingerprint_token(token);
+    const link = await this.access_links.find_by_token_hmac(token_hmac);
+    const state: PublicAccessLinkState = resolve_public_access_link_state(
+      link,
+      this.clock.now(),
+    );
+
+    // La longueur n'accompagne que l'etat actif : sur un lien mort, la donner
+    // dirait que le token a existe.
+    return state === 'active' && link !== null
+      ? { state, pin_length: link.pin_length }
+      : { state };
+  }
+
+  @Post(':token/unlock')
+  @HttpCode(200)
+  async unlock_deposit_link(
+    @Param('token') token: string,
+    @Body() body: unknown,
+    @Req() request: IncomingMessage,
+    @Res() response: ServerResponse,
+  ): Promise<void> {
+    const outcome: DepositLinkUnlockOutcome = await this.unlocker.unlock({
+      token,
+      submitted_pin: read_submitted_pin(body),
+      client_ip: resolve_trusted_client_ip(
+        read_forwarded_for_chain(request.headers),
+        request.socket.remoteAddress ?? '',
+        this.environment.trusted_proxy_hop_count,
+      ),
+    });
+
+    if (outcome.kind === 'rate_limited') {
+      // Le seul refus qui s'explique, parce qu'il ne dit rien du lien : il
+      // parle de l'adresse qui appelle, et le client legitime a besoin de
+      // savoir qu'il doit patienter plutot que redemander un lien.
+      response.setHeader('retry-after', CLIENT_PIN_IP_RATE_LIMIT_BOUNDS.window_seconds);
+      write_json(response, 429, { state: 'rate_limited' });
+      return;
+    }
+
+    if (outcome.kind === 'blocked') {
+      write_json(response, 403, { state: 'blocked' });
+      return;
+    }
+
+    if (outcome.kind === 'refused') {
+      write_json(response, 401, GENERIC_REFUSAL_BODY);
+      return;
+    }
+
+    response.setHeader(
+      'set-cookie',
+      build_deposit_session_cookie(outcome.session_token),
+    );
+    write_json(response, 200, { expires_at: outcome.expires_at.toISOString() });
+  }
+}
+
+// Un corps illisible est un refus comme un autre, jamais une erreur 400 : une
+// erreur de forme distinguerait « ce token existe, mais ta requete est mal
+// faite » de « ce token n'existe pas ».
+function read_submitted_pin(body: unknown): string {
+  if (typeof body !== 'object' || body === null) {
+    return '';
+  }
+  const submitted_pin: unknown = (body as Record<string, unknown>).pin;
+  return typeof submitted_pin === 'string' ? submitted_pin : '';
+}
+
+function build_deposit_session_cookie(session_token: string): string {
+  return [
+    `${DEPOSIT_SESSION_COOKIE_NAME}=${session_token}`,
+    // Confine a la surface anonyme : ce cookie n'a rien a faire sur une route
+    // avocat, ni sur les assets du front.
+    `Path=${PUBLIC_DEPOSIT_PATH}`,
+    `Max-Age=${CLIENT_DEPOSIT_SESSION_LIFETIME_SECONDS}`,
+    // Aucun JavaScript ne le lit : une XSS sur la page de depot ne l'exfiltre
+    // pas.
+    'HttpOnly',
+    // Bloque le POST inter-site : sans lui, une page piegee declencherait un
+    // depot ou une suppression au nom d'un client deja deverrouille.
+    'SameSite=Lax',
+    // Toujours, y compris en developpement : les navigateurs acceptent un
+    // cookie `Secure` sur http://localhost, et un cookie de session qui
+    // transite en clair une seule fois est un cookie perdu.
+    'Secure',
+  ].join('; ');
+}
+
+function write_json(response: ServerResponse, status_code: number, body: unknown): void {
+  response.statusCode = status_code;
+  response.setHeader('content-type', 'application/json');
+  response.end(JSON.stringify(body));
+}

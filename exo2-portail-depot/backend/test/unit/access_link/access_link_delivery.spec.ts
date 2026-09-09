@@ -1,8 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import {
-  generate_client_pin,
-  MAXIMUM_UNBIASED_PIN_BYTE_VALUE,
-} from '../../../src/access_link/client_pin_generator';
+import { generate_client_pin } from '../../../src/access_link/client_pin_generator';
 import { compose_access_link_delivery_message } from '../../../src/access_link/access_link_delivery_message';
 import type { RandomSource } from '../../../src/domain/presigned_upload';
 
@@ -23,7 +20,9 @@ describe('generate_client_pin', () => {
   // l'entropie la ou il y en a deja peu.
   it('rejette les octets qui biaiseraient le tirage plutot que de les replier sur l alphabet', () => {
     const rejected_then_accepted: RandomSource = {
-      bytes: (): Buffer => Buffer.from([MAXIMUM_UNBIASED_PIN_BYTE_VALUE, 7, 3, 1, 9]),
+      // 250 est le premier octet de la zone biaisee pour dix chiffres :
+      // 256 = 25 x 10 + 6, donc 250 a 255 replies donneraient 0 a 5 en prime.
+      bytes: (): Buffer => Buffer.from([250, 7, 3, 1, 9]),
     };
 
     // Le premier octet, hors zone non biaisee, est ecarte : le PIN commence

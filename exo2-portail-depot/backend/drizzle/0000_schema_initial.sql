@@ -125,6 +125,15 @@ CREATE TABLE "deposit"."deposit_request" (
 	CONSTRAINT "deposit_request_title_is_not_blank" CHECK (btrim("deposit"."deposit_request"."title") <> '')
 );
 --> statement-breakpoint
+CREATE TABLE "deposit"."deposit_session" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"access_link_id" uuid NOT NULL,
+	"token_sha256" text NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	CONSTRAINT "deposit_session_expires_after_creation" CHECK ("deposit"."deposit_session"."expires_at" > "deposit"."deposit_session"."created_at")
+);
+--> statement-breakpoint
 CREATE TABLE "deposit"."expected_document" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"deposit_request_id" uuid NOT NULL,
@@ -142,6 +151,7 @@ ALTER TABLE "auth"."account" ADD CONSTRAINT "account_userId_user_id_fk" FOREIGN 
 ALTER TABLE "auth"."session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."access_link" ADD CONSTRAINT "access_link_deposit_request_id_deposit_request_id_fk" FOREIGN KEY ("deposit_request_id") REFERENCES "deposit"."deposit_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."deposit_request" ADD CONSTRAINT "deposit_request_owner_user_id_user_id_fk" FOREIGN KEY ("owner_user_id") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "deposit"."deposit_session" ADD CONSTRAINT "deposit_session_access_link_id_access_link_id_fk" FOREIGN KEY ("access_link_id") REFERENCES "deposit"."access_link"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."expected_document" ADD CONSTRAINT "expected_document_deposit_request_id_deposit_request_id_fk" FOREIGN KEY ("deposit_request_id") REFERENCES "deposit"."deposit_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "account_user_id_idx" ON "auth"."account" USING btree ("userId");--> statement-breakpoint
 CREATE UNIQUE INDEX "account_provider_id_account_id_key" ON "auth"."account" USING btree ("providerId","accountId");--> statement-breakpoint
@@ -154,5 +164,7 @@ CREATE UNIQUE INDEX "access_link_token_hmac_key" ON "deposit"."access_link" USIN
 CREATE UNIQUE INDEX "access_link_one_active_per_request_idx" ON "deposit"."access_link" USING btree ("deposit_request_id") WHERE "deposit"."access_link"."status" = 'active';--> statement-breakpoint
 CREATE INDEX "access_link_deposit_request_id_idx" ON "deposit"."access_link" USING btree ("deposit_request_id","created_at");--> statement-breakpoint
 CREATE INDEX "deposit_request_owner_user_id_idx" ON "deposit"."deposit_request" USING btree ("owner_user_id","created_at");--> statement-breakpoint
+CREATE UNIQUE INDEX "deposit_session_token_sha256_key" ON "deposit"."deposit_session" USING btree ("token_sha256");--> statement-breakpoint
+CREATE INDEX "deposit_session_access_link_id_idx" ON "deposit"."deposit_session" USING btree ("access_link_id");--> statement-breakpoint
 CREATE INDEX "expected_document_deposit_request_id_idx" ON "deposit"."expected_document" USING btree ("deposit_request_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "expected_document_position_within_request_idx" ON "deposit"."expected_document" USING btree ("deposit_request_id","position");

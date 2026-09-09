@@ -198,3 +198,33 @@ export const access_link = deposit_schema.table(
     ),
   ],
 );
+
+// La session est adossee au LIEN, pas a la demande : c'est le lien qui porte
+// l'autorisation, et sa revocation doit emporter tout ce qui en decoule. La
+// cascade le fait a la suppression ; la relecture du lien a chaque requete le
+// fait a la revocation.
+export const deposit_session = deposit_schema.table(
+  'deposit_session',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    access_link_id: uuid('access_link_id')
+      .notNull()
+      .references(() => access_link.id, { onDelete: 'cascade' }),
+    // Jamais le jeton : son empreinte. Un jeton de session est un secret
+    // porteur au meme titre que le token du lien — qui le lit entre dans le
+    // depot sans connaitre le PIN. SHA-256 suffit, sans argon2 : le jeton porte
+    // 190 bits d'alea, il n'y a rien a casser hors ligne.
+    token_sha256: text('token_sha256').notNull(),
+    created_at: timestamp('created_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+    expires_at: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('deposit_session_token_sha256_key').on(table.token_sha256),
+    // Postgres n'indexe jamais le cote referencant d'une clef etrangere, et la
+    // cascade depuis un lien supprime balaierait sinon la table entiere.
+    index('deposit_session_access_link_id_idx').on(table.access_link_id),
+    check('deposit_session_expires_after_creation', sql`${table.expires_at} > ${table.created_at}`),
+  ],
+);

@@ -131,6 +131,7 @@ describe('migrations de base de donnees', () => {
       'auth.verification',
       'deposit.access_link',
       'deposit.deposit_request',
+      'deposit.deposit_session',
       'deposit.expected_document',
       'security.authentication_failure_by_ip',
       'security.lawyer_login_failure_by_account',
@@ -186,7 +187,7 @@ describe('migrations de base de donnees', () => {
     expect(rejected).toEqual([]);
 
     const { tables } = await read_object_names();
-    expect(tables).toHaveLength(10);
+    expect(tables).toHaveLength(11);
   });
 
   it('quatre demarrages simultanes n appliquent quand meme chaque migration une seule fois', async () => {

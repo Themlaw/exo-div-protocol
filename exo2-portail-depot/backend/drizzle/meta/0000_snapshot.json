@@ -1,5 +1,5 @@
 {
-  "id": "40e097bb-6082-49cc-b676-728d619ff7b1",
+  "id": "d7542662-36ee-4fa2-8f7a-16c57fec98e8",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -881,6 +881,102 @@
         "deposit_request_title_is_not_blank": {
           "name": "deposit_request_title_is_not_blank",
           "value": "btrim(\"deposit\".\"deposit_request\".\"title\") <> ''"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "deposit.deposit_session": {
+      "name": "deposit_session",
+      "schema": "deposit",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "access_link_id": {
+          "name": "access_link_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "token_sha256": {
+          "name": "token_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "deposit_session_token_sha256_key": {
+          "name": "deposit_session_token_sha256_key",
+          "columns": [
+            {
+              "expression": "token_sha256",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "deposit_session_access_link_id_idx": {
+          "name": "deposit_session_access_link_id_idx",
+          "columns": [
+            {
+              "expression": "access_link_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "deposit_session_access_link_id_access_link_id_fk": {
+          "name": "deposit_session_access_link_id_access_link_id_fk",
+          "tableFrom": "deposit_session",
+          "tableTo": "access_link",
+          "schemaTo": "deposit",
+          "columnsFrom": [
+            "access_link_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "deposit_session_expires_after_creation": {
+          "name": "deposit_session_expires_after_creation",
+          "value": "\"deposit\".\"deposit_session\".\"expires_at\" > \"deposit\".\"deposit_session\".\"created_at\""
         }
       },
       "isRLSEnabled": false

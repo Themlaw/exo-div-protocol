@@ -53,9 +53,11 @@ export interface AccessLinkRepository {
   ): Promise<boolean>;
 }
 
-type AccessLinkRow = typeof access_link.$inferSelect;
+export type AccessLinkRow = typeof access_link.$inferSelect;
 
-function to_domain_access_link(row: AccessLinkRow): AccessLink {
+// Exportee : le depot des sessions lit le lien dans la meme requete que la
+// session, et doit le rendre sous la meme forme de domaine.
+export function to_domain_access_link(row: AccessLinkRow): AccessLink {
   return {
     id: row.id,
     deposit_request_id: row.deposit_request_id,

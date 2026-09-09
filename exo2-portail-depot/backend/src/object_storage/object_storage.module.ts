@@ -30,6 +30,19 @@ export class ObjectStorageBucketBootstrapper implements OnApplicationBootstrap {
       quarantine_bucket: QUARANTINE_BUCKET_NAME,
       verified_bucket: VERIFIED_BUCKET_NAME,
     });
+
+    // Un avertissement BRUYANT et non une erreur : sans notifications, le
+    // produit fonctionne encore — la reconciliation reprend les pieces en
+    // attente — mais chaque scan attend son tour de balayage au lieu de partir
+    // a l'arrivee. Le taire ferait passer une degradation pour un
+    // fonctionnement normal.
+    if (!(await this.object_storage.ensure_arrival_notifications())) {
+      this.logger.warn(
+        OBJECT_STORAGE_LOG_CONTEXT,
+        "notifications d'objet non configurees : les scans partiront de la reconciliation",
+        { quarantine_bucket: QUARANTINE_BUCKET_NAME },
+      );
+    }
   }
 }
 

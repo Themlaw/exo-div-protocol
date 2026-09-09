@@ -118,6 +118,39 @@ export function is_deposited_file_scan_overdue(
   return minutes_since_upload > overdue_after_minutes;
 }
 
+// Une reservation dont le presigned a expire sans qu'aucun objet n'arrive :
+// formulaire abandonne, onglet ferme, transfert coupe. Elle n'occupe rien — son
+// statut n'est pas occupant — mais elle s'accumule, et surtout elle porte une
+// cle d'objet qui restera reservee pour toujours.
+export function is_deposited_file_upload_reservation_abandoned(
+  file: DepositedFile,
+  reservation_grace_minutes: number,
+  now: Date,
+): boolean {
+  if (file.status !== 'pending_upload') {
+    return false;
+  }
+
+  const minutes_since_reservation: number =
+    (now.getTime() - file.created_at.getTime()) / (60 * 1000);
+
+  return minutes_since_reservation > reservation_grace_minutes;
+}
+
+// Les statuts pour lesquels la quarantaine ne doit plus rien contenir : le
+// fichier a soit ete promu dans le bucket definitif, soit ete efface. Un objet
+// qui traine encore la est le reste d'une promotion ou d'une suppression
+// interrompue.
+const TERMINAL_DEPOSITED_FILE_STATUSES: readonly DepositedFileStatus[] = [
+  'clean',
+  'infected',
+  'rejected',
+];
+
+export function should_quarantine_object_be_collected(file: DepositedFile): boolean {
+  return TERMINAL_DEPOSITED_FILE_STATUSES.includes(file.status);
+}
+
 // Un fichier deja `clean` qui se fait reecrire ne peut pas garder son statut :
 // sans cette remise a zero, un fichier sain remplace apres coup heriterait de sa validation.
 export function reset_deposited_file_after_new_object_arrival(

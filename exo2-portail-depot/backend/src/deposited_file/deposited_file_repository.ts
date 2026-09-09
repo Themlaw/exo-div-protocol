@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { ApplicationDatabase } from '../db/database_connection';
 import { deposited_file, expected_document } from '../db/schema/deposit_schema';
 import type { DepositedFile, DepositedFileStatus } from '../domain/deposited_file';
@@ -54,6 +54,27 @@ export interface DepositedFileRepository {
 
   reserve_upload_slot(file: NewDepositedFile): Promise<DepositedFile>;
 
+  // La cle de l'objet est le seul lien entre une notification de MinIO et la
+  // piece qu'elle concerne : MinIO ne connait que des cles.
+  find_by_object_key(object_key: string): Promise<DepositedFile | null>;
+
+  // Sans predicat d'appartenance : le travailleur de scan n'agit au nom de
+  // personne, il execute un job que le serveur a lui-meme enfile.
+  find_by_id(deposited_file_id: string): Promise<DepositedFile | null>;
+
+  // Ecrit un etat deja calcule par le domaine. Leve
+  // `ExpectedDocumentAlreadyOccupiedError` si l'ecriture ferait deux occupants
+  // sur un meme emplacement : c'est l'index qui tranche, comme a la reservation.
+  save_state(file: DepositedFile): Promise<void>;
+
+  // Les deux lectures de la RECONCILIATION. Elles ne portent aucun predicat
+  // d'appartenance : le balayage ne travaille pour personne, il repare l'etat
+  // global. Elles sont bornees par une date plutot que par un nombre, parce
+  // qu'un balayage qui laisse un reliquat derriere lui ne converge jamais.
+  list_upload_reservations_created_before(instant: Date): Promise<DepositedFile[]>;
+
+  list_scans_pending_since_before(instant: Date): Promise<DepositedFile[]>;
+
   delete_file(deposited_file_id: string): Promise<void>;
 }
 
@@ -83,6 +104,50 @@ export class DrizzleDepositedFileRepository implements DepositedFileRepository {
 
     const found = rows[0];
     return found === undefined ? null : to_domain_deposited_file(found);
+  }
+
+  async find_by_id(deposited_file_id: string): Promise<DepositedFile | null> {
+    if (!UUID_SHAPE.test(deposited_file_id)) {
+      return null;
+    }
+
+    const rows = await this.database
+      .select()
+      .from(deposited_file)
+      .where(eq(deposited_file.id, deposited_file_id));
+
+    const found = rows[0];
+    return found === undefined ? null : to_domain_deposited_file(found);
+  }
+
+  async find_by_object_key(object_key: string): Promise<DepositedFile | null> {
+    const rows = await this.database
+      .select()
+      .from(deposited_file)
+      .where(eq(deposited_file.object_key, object_key));
+
+    const found = rows[0];
+    return found === undefined ? null : to_domain_deposited_file(found);
+  }
+
+  async save_state(file: DepositedFile): Promise<void> {
+    try {
+      await this.database
+        .update(deposited_file)
+        .set({
+          detected_mime_type: file.detected_mime_type,
+          actual_size_bytes: file.actual_size_bytes,
+          status: file.status,
+          uploaded_at: file.uploaded_at,
+          scanned_at: file.scanned_at,
+        })
+        .where(eq(deposited_file.id, file.id));
+    } catch (error: unknown) {
+      if (violates_occupant_uniqueness(error)) {
+        throw new ExpectedDocumentAlreadyOccupiedError(file.expected_document_id);
+      }
+      throw error;
+    }
   }
 
   async find_occupant_of_expected_document(
@@ -172,6 +237,27 @@ export class DrizzleDepositedFileRepository implements DepositedFileRepository {
       }
       throw error;
     }
+  }
+
+  async list_upload_reservations_created_before(instant: Date): Promise<DepositedFile[]> {
+    const rows = await this.database
+      .select()
+      .from(deposited_file)
+      .where(
+        and(eq(deposited_file.status, 'pending_upload'), lt(deposited_file.created_at, instant)),
+      );
+
+    return rows.map(to_domain_deposited_file);
+  }
+
+  async list_scans_pending_since_before(instant: Date): Promise<DepositedFile[]> {
+    const rows = await this.database
+      .select()
+      .from(deposited_file)
+      .where(and(eq(deposited_file.status, 'pending_scan'), lt(deposited_file.uploaded_at, instant)))
+      .orderBy(deposited_file.uploaded_at);
+
+    return rows.map(to_domain_deposited_file);
   }
 
   // La ligne seulement : l'objet du bucket est supprime par l'appelant, qui seul

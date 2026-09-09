@@ -1,7 +1,10 @@
 import {
   apply_scan_verdict_to_deposited_file,
   is_deposited_file_scan_overdue,
+  is_deposited_file_upload_reservation_abandoned,
   reset_deposited_file_after_new_object_arrival,
+  should_quarantine_object_be_collected,
+  type DepositedFileStatus,
 } from '../../../src/domain/deposited_file';
 import {
   REFERENCE_NOW,
@@ -122,4 +125,62 @@ describe('reset_deposited_file_after_new_object_arrival', () => {
     expect(reset_file.scanned_at).toBeNull();
     expect(reset_file.detected_mime_type).toBeNull();
   });
+});
+
+describe('is_deposited_file_upload_reservation_abandoned', () => {
+  it("une reservation dont le delai est depasse et qui n'a jamais recu d'objet est abandonnee", () => {
+    const reservation = build_deposited_file({
+      status: 'pending_upload',
+      uploaded_at: null,
+      created_at: add_minutes(REFERENCE_NOW, -31),
+    });
+
+    expect(is_deposited_file_upload_reservation_abandoned(reservation, 30, REFERENCE_NOW)).toBe(
+      true,
+    );
+  });
+
+  // Le transfert peut etre en cours a cet instant meme : l'effacer ferait
+  // perdre au client un depot qu'il croit en train de partir.
+  it('une reservation encore dans son delai ne l est pas', () => {
+    const reservation = build_deposited_file({
+      status: 'pending_upload',
+      uploaded_at: null,
+      created_at: add_minutes(REFERENCE_NOW, -29),
+    });
+
+    expect(is_deposited_file_upload_reservation_abandoned(reservation, 30, REFERENCE_NOW)).toBe(
+      false,
+    );
+  });
+
+  it.each<DepositedFileStatus>(['pending_scan', 'clean', 'infected', 'rejected'])(
+    "un fichier '%s' n'est jamais une reservation abandonnee, quel que soit son age",
+    (status) => {
+      const file = build_deposited_file({
+        status,
+        created_at: add_minutes(REFERENCE_NOW, -6000),
+      });
+
+      expect(is_deposited_file_upload_reservation_abandoned(file, 30, REFERENCE_NOW)).toBe(false);
+    },
+  );
+});
+
+describe('should_quarantine_object_be_collected', () => {
+  it.each<DepositedFileStatus>(['clean', 'infected', 'rejected'])(
+    "un fichier '%s' n'a plus rien a faire en quarantaine : son objet a ete promu ou efface",
+    (status) => {
+      expect(should_quarantine_object_be_collected(build_deposited_file({ status }))).toBe(true);
+    },
+  );
+
+  // Ramasser ces objets-la detruirait exactement ce que le travailleur
+  // s'apprete a lire, ou ce que le client est en train d'envoyer.
+  it.each<DepositedFileStatus>(['pending_upload', 'pending_scan'])(
+    "l'objet d'un fichier '%s' doit rester en quarantaine",
+    (status) => {
+      expect(should_quarantine_object_be_collected(build_deposited_file({ status }))).toBe(false);
+    },
+  );
 });

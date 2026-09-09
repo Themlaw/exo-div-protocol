@@ -18,6 +18,7 @@ export const ENVIRONMENT_VARIABLE_NAMES = {
   access_link_token_pepper: 'ACCESS_LINK_TOKEN_PEPPER',
   internal_storage_webhook_secret: 'INTERNAL_STORAGE_WEBHOOK_SECRET',
   minio_endpoint: 'MINIO_ENDPOINT',
+  clamav_endpoint: 'CLAMAV_ENDPOINT',
   minio_root_user: 'MINIO_ROOT_USER',
   minio_root_password: 'MINIO_ROOT_PASSWORD',
   demo_lawyer_email: 'DEMO_LAWYER_EMAIL',
@@ -52,6 +53,10 @@ export interface ApplicationEnvironment {
   // faire a temps constant, ce qu'une vraie signature n'aurait pas exige.
   internal_storage_webhook_secret: string;
   minio_endpoint: string;
+  // Ou joindre clamd, sous la forme `tcp://hote:port`. Une variable et non une
+  // constante : le scanner est un service voisin, et son adresse est une
+  // decision de deploiement au meme titre que celle de MinIO.
+  clamav_endpoint: string;
   minio_root_user: string;
   minio_root_password: string;
   demo_lawyer_email: string;
@@ -447,6 +452,7 @@ export function parse_application_environment(
     ENVIRONMENT_VARIABLE_NAMES.internal_storage_webhook_secret,
   );
   const minio_endpoint = required_value(ENVIRONMENT_VARIABLE_NAMES.minio_endpoint);
+  const clamav_endpoint = required_value(ENVIRONMENT_VARIABLE_NAMES.clamav_endpoint);
   const minio_root_user = required_value(ENVIRONMENT_VARIABLE_NAMES.minio_root_user);
   const minio_root_password = required_value(
     ENVIRONMENT_VARIABLE_NAMES.minio_root_password,
@@ -714,6 +720,7 @@ export function parse_application_environment(
       internal_storage_webhook_secret,
     ),
     minio_endpoint: resolved(ENVIRONMENT_VARIABLE_NAMES.minio_endpoint, minio_endpoint),
+    clamav_endpoint: resolved(ENVIRONMENT_VARIABLE_NAMES.clamav_endpoint, clamav_endpoint),
     minio_root_user: resolved(ENVIRONMENT_VARIABLE_NAMES.minio_root_user, minio_root_user),
     minio_root_password: resolved(
       ENVIRONMENT_VARIABLE_NAMES.minio_root_password,

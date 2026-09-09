@@ -1,10 +1,19 @@
-import { Client as MinioClient, type PostPolicyResult } from 'minio';
+import type { Readable } from 'node:stream';
+import {
+  Client as MinioClient,
+  CopyConditions,
+  NotificationConfig,
+  QueueConfig,
+  type PostPolicyResult,
+} from 'minio';
 import type { PresignedUploadPolicy } from '../domain/presigned_upload';
 import {
+  OBJECT_ARRIVAL_NOTIFICATION_ARN,
   QUARANTINE_BUCKET_NAME,
   VERIFIED_BUCKET_NAME,
   type ObjectStorage,
   type PresignedUploadTicket,
+  type StoredObjectDescription,
 } from './object_storage';
 
 export interface MinioConnectionSettings {
@@ -58,6 +67,23 @@ export class MinioObjectStorage implements ObjectStorage {
     }
   }
 
+  // Seule la quarantaine est abonnee : le bucket definitif ne recoit d'objets
+  // que de nous, par promotion, et s'y abonner relancerait un scan sur un
+  // fichier deja juge.
+  async ensure_arrival_notifications(): Promise<boolean> {
+    const configuration = new NotificationConfig();
+    const queue = new QueueConfig(OBJECT_ARRIVAL_NOTIFICATION_ARN);
+    queue.addEvent('s3:ObjectCreated:*');
+    configuration.add(queue);
+
+    try {
+      await this.#client.setBucketNotification(QUARANTINE_BUCKET_NAME, configuration);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async create_presigned_upload(
     policy: PresignedUploadPolicy,
     declared_mime_type: string,
@@ -95,4 +121,73 @@ export class MinioObjectStorage implements ObjectStorage {
   async delete_object(bucket: string, object_key: string): Promise<void> {
     await this.#client.removeObject(bucket, object_key);
   }
+
+  async describe_object(
+    bucket: string,
+    object_key: string,
+  ): Promise<StoredObjectDescription | null> {
+    try {
+      const stat = await this.#client.statObject(bucket, object_key);
+      return { size_bytes: stat.size };
+    } catch (error: unknown) {
+      // Un objet absent est une reponse, pas une panne. Toute AUTRE erreur
+      // remonte : confondre « pas la » avec « MinIO ne repond plus » ferait
+      // conclure a une piece disparue sur une simple coupure reseau.
+      if (is_object_not_found(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async read_object_prefix(
+    bucket: string,
+    object_key: string,
+    byte_count: number,
+  ): Promise<Buffer> {
+    const partial_stream = await this.#client.getPartialObject(bucket, object_key, 0, byte_count);
+
+    const chunks: Buffer[] = [];
+    for await (const chunk of partial_stream) {
+      chunks.push(chunk as Buffer);
+    }
+    return Buffer.concat(chunks);
+  }
+
+  async open_object_stream(bucket: string, object_key: string): Promise<Readable> {
+    return this.#client.getObject(bucket, object_key);
+  }
+
+  async *list_object_keys(bucket: string): AsyncIterable<string> {
+    // Recursif : les cles de depot portent des `/`, que MinIO traiterait sinon
+    // comme des dossiers et n'enumererait pas.
+    for await (const entry of this.#client.listObjectsV2(bucket, '', true)) {
+      if (entry.name !== undefined) {
+        yield entry.name;
+      }
+    }
+  }
+
+  async promote_object(input: {
+    from_bucket: string;
+    to_bucket: string;
+    object_key: string;
+  }): Promise<void> {
+    await this.#client.copyObject(
+      input.to_bucket,
+      input.object_key,
+      `/${input.from_bucket}/${input.object_key}`,
+      new CopyConditions(),
+    );
+
+    await this.#client.removeObject(input.from_bucket, input.object_key);
+  }
+}
+
+function is_object_not_found(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const { code } = error as { code?: unknown };
+  return code === 'NotFound' || code === 'NoSuchKey';
 }

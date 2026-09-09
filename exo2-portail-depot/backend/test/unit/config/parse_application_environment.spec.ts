@@ -25,6 +25,7 @@ const VALID_RAW_ENVIRONMENT: Readonly<Record<string, string>> = {
     MINIMUM_INTERNAL_STORAGE_WEBHOOK_SECRET_LENGTH,
   ),
   MINIO_ENDPOINT: 'http://minio:9000',
+  CLAMAV_ENDPOINT: 'tcp://clamav:3310',
   MINIO_ROOT_USER: 'portail-minio-root',
   MINIO_ROOT_PASSWORD: 'f'.repeat(64),
   DEMO_LAWYER_EMAIL: 'avocat@cabinet-demonstration.fr',
@@ -59,6 +60,7 @@ describe('parse_application_environment', () => {
       internal_storage_webhook_secret:
         VALID_RAW_ENVIRONMENT.INTERNAL_STORAGE_WEBHOOK_SECRET,
       minio_endpoint: VALID_RAW_ENVIRONMENT.MINIO_ENDPOINT,
+      clamav_endpoint: VALID_RAW_ENVIRONMENT.CLAMAV_ENDPOINT,
       minio_root_user: VALID_RAW_ENVIRONMENT.MINIO_ROOT_USER,
       minio_root_password: VALID_RAW_ENVIRONMENT.MINIO_ROOT_PASSWORD,
       demo_lawyer_email: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_EMAIL,
@@ -471,6 +473,7 @@ describe('[F7] les ecritures alternatives de la boucle locale sont refusees en p
         raw_environment_with({
           DATABASE_URL: 'postgres://portail:mdp@postgres:5432/portail',
           MINIO_ENDPOINT: 'http://minio:9000',
+  CLAMAV_ENDPOINT: 'tcp://clamav:3310',
         }),
       ),
     ).not.toThrow();

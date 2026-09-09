@@ -69,6 +69,21 @@ services:
       # Le client JS de MinIO n'expose pas `setBucketCors` : la configuration
       # se fait donc ici, cote serveur, et non depuis l'application.
       MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_BASE_URL}
+      # Cible de notification `portail`, d'ou l'ARN `arn:minio:sqs::portail:webhook`
+      # auquel l'application abonne la quarantaine au demarrage. Sans elle, MinIO
+      # refuserait l'abonnement et aucun scan ne partirait a l'arrivee d'un objet.
+      MINIO_NOTIFY_WEBHOOK_ENABLE_portail: "on"
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_portail: "http://app:${PORT:-3000}/api/v1/internal/storage/events"
+      # Le meme secret que l'application attend en en-tete Authorization : MinIO
+      # ne signe pas le corps de ses notifications, ce jeton est la seule preuve
+      # que l'appel vient bien du stockage.
+      MINIO_NOTIFY_WEBHOOK_AUTH_TOKEN_portail: ${INTERNAL_STORAGE_WEBHOOK_SECRET}
+      # File sur disque : une notification emise pendant que l'API redemarre est
+      # gardee et rejouee, au lieu d'etre perdue. Sans elle, MinIO exige aussi que
+      # la cible reponde des SON demarrage, ce qui rendrait l'ordre de lancement
+      # des services significatif.
+      MINIO_NOTIFY_WEBHOOK_QUEUE_DIR_portail: /data/.notifications
+      MINIO_NOTIFY_WEBHOOK_QUEUE_LIMIT_portail: "10000"
     volumes:
       - ./data/minio:/data
     tmpfs:
@@ -87,6 +102,64 @@ services:
       # sortant, puisque ce reseau est lui aussi interne.
       - proxied
 
+  clamav:
+    # clamd, joint en TCP par le worker. L'image officielle embarque deja un jeu
+    # de signatures : le service repond des le premier demarrage, sans attendre
+    # un telechargement.
+    #
+    # A SAVOIR AVANT DE DEPLOYER : clamd charge toute la base de signatures en
+    # memoire et reclame environ 1,5 Go rien pour demarrer. Sur une VM plus
+    # petite il est tue par le noyau, et le fail closed transforme alors chaque
+    # depot en scan qui ne finit jamais.
+    image: clamav/clamav:1.5.1
+    restart: unless-stopped
+    # SEULE exception au 1000:1000 de tous les autres services, et la regle
+    # qu'elle sert reste tenue : ce n'est pas root. L'image cree ses repertoires
+    # avec `install -o clamav -g clamav`, ce qu'aucun autre uid ne peut faire, et
+    # elle embarque son propre compte non privilegie — le forcer a 1000
+    # empechait simplement clamd de demarrer.
+    user: "100:101"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      # Les signatures survivent au conteneur : sans persistance, chaque
+      # redemarrage repartirait du jeu fige dans l'image et retelechargerait tout.
+      #
+      # Volume NOMME et non un bind sous ./data, contrairement a Postgres et
+      # MinIO : Docker en herite le proprietaire du repertoire de l'image, donc
+      # l'uid 100, la ou un bind exigerait un chown de l'hote. Le cout est
+      # acceptable parce que ce contenu est un CACHE — il se retelecharge — et
+      # non une donnee de client.
+      - clamav_signatures:/var/lib/clamav
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /run:rw,noexec,nosuid,size=16m,uid=100,gid=101
+      # Les journaux vont en memoire et disparaissent avec le conteneur : les
+      # verdicts qui comptent sont ecrits par NOUS, dans nos propres journaux.
+      # clamd refuse simplement de demarrer s'il ne peut pas ouvrir les siens.
+      - /var/log/clamav:rw,noexec,nosuid,size=32m,uid=100,gid=101
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # Le chargement des signatures prend une bonne minute : une fenetre courte
+      # ferait redemarrer le service en boucle avant qu'il ait fini de demarrer.
+      start_period: 180s
+    networks:
+      - datastore
+      # SEUL service a sortir sur Internet, et c'est un choix assume : un
+      # antivirus dont les signatures datent de l'image ne protege plus de
+      # grand-chose. Il ne partage ce reseau avec personne, donc aucun autre
+      # conteneur ne regagne d'acces sortant par ce biais.
+      - signatures
+
+volumes:
+  clamav_signatures:
+
 networks:
   # Seul Traefik sera attache a `edge`. C'est ce qui fait de lui le pont unique
   # vers l'exterieur : les services qu'il route restent sur des reseaux internes
@@ -99,6 +172,10 @@ networks:
   # passerelle. Traefik atteint ces services, eux n'atteignent pas Internet.
   proxied:
     internal: true
+
+  # Reserve a clamav, pour freshclam et rien d'autre.
+  signatures:
+    driver: bridge
 
   datastore:
     # `internal: true` coupe tout acces sortant vers Internet. Ni Postgres ni
@@ -117,5 +194,6 @@ networks:
 #   traefik   -> edge + proxied                 (seul pont vers l'exterieur)
 #   app       -> proxied + datastore            (route par Traefik, parle a la base)
 #   worker    -> datastore                      (jamais expose, meme via Traefik)
+#   clamav    -> datastore + signatures          (joignable par le worker, sort pour freshclam)
 #   minio     -> proxied + datastore            (routable, car upload direct navigateur)
 #   postgres  -> datastore                      (joignable par rien d'autre)

@@ -22,12 +22,31 @@ services:
       - "127.0.0.1:${POSTGRES_PORT}:5432"
 
   minio:
+    environment:
+      # L'API tourne sur l'HOTE en developpement, pas dans un conteneur `app` :
+      # le nom de service de la production ne resout pas ici, et les
+      # notifications resteraient indefiniment dans la file de MinIO.
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_portail: "http://host.docker.internal:${PORT:-3000}/api/v1/internal/storage/events"
+    extra_hosts:
+      # Linux ne fournit pas `host.docker.internal` par defaut, contrairement a
+      # Docker Desktop.
+      - "host.docker.internal:host-gateway"
     networks:
       - datastore
       - hostaccess
     ports:
       - "127.0.0.1:${MINIO_API_PORT}:9000"
       - "127.0.0.1:${MINIO_CONSOLE_PORT}:9001"
+
+  clamav:
+    networks:
+      - datastore
+      - hostaccess
+      - signatures
+    ports:
+      # Le worker tourne sur l'HOTE en developpement : sans ce port, il n'a aucun
+      # moyen de joindre clamd et tout scan repondrait `scanner_unavailable`.
+      - "127.0.0.1:${CLAMAV_PORT}:3310"
 
 networks:
   hostaccess:

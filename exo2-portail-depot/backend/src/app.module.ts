@@ -8,6 +8,7 @@ import { AccessLinkModule } from './access_link/access_link.module';
 import { DepositSessionModule } from './deposit_session/deposit_session.module';
 import { DepositedFileModule } from './deposited_file/deposited_file.module';
 import { ObjectStorageModule } from './object_storage/object_storage.module';
+import { ScanModule } from './scan/scan.module';
 import { ClientDepositSessionGuard } from './deposit_session/client_deposit_session.guard';
 import { DatabaseModule } from './db/database.module';
 import { LawyerAuthModule } from './auth/lawyer_auth.module';
@@ -32,6 +33,7 @@ import { UnroutedRequestFilter } from './auth/unrouted_request.filter';
     DepositSessionModule,
     DepositedFileModule,
     ObjectStorageModule,
+    ScanModule,
     DatabaseModule,
     LawyerAuthModule,
     DepositModule,

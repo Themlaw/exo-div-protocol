@@ -11,8 +11,7 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
-import { read_authenticated_lawyer_session } from '../auth/route_access.guard';
-import type { LawyerSession } from '../auth/lawyer_session_reader';
+import { require_lawyer_session } from '../auth/require_lawyer_session';
 import {
   parse_deposit_request_creation,
   type ParsedDepositRequestCreation,
@@ -57,7 +56,7 @@ export class DepositRequestsController {
       throw new BadRequestException({ violations: parsed.violations });
     }
 
-    const owner_user_id: string = this.require_lawyer_session(request).user_id;
+    const owner_user_id: string = require_lawyer_session(request).user_id;
     const created_id: string = await this.deposit_requests.create({
       owner_user_id,
       creation: parsed.creation,
@@ -88,7 +87,7 @@ export class DepositRequestsController {
     @Req() request: IncomingMessage,
   ): Promise<DepositRequestOverview[]> {
     return this.deposit_requests.list_overviews_for_owner(
-      this.require_lawyer_session(request).user_id,
+      require_lawyer_session(request).user_id,
     );
   }
 
@@ -100,7 +99,7 @@ export class DepositRequestsController {
     const detail: DepositRequestDetail | null =
       await this.deposit_requests.find_detail_for_owner(
         deposit_request_id,
-        this.require_lawyer_session(request).user_id,
+        require_lawyer_session(request).user_id,
       );
 
     // 404 et jamais 403, y compris pour une demande qui existe mais appartient a
@@ -112,16 +111,5 @@ export class DepositRequestsController {
     }
 
     return detail;
-  }
-
-  // Le garde a deja refuse la requete si la session manquait : arriver ici sans
-  // session serait un garde debranche, pas une requete anonyme. On leve plutot
-  // que de traiter la demande sans proprietaire.
-  private require_lawyer_session(request: IncomingMessage): LawyerSession {
-    const session: LawyerSession | null = read_authenticated_lawyer_session(request);
-    if (session === null) {
-      throw new NotFoundException();
-    }
-    return session;
   }
 }

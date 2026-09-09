@@ -1,5 +1,5 @@
 {
-  "id": "f30dc034-b369-4f1e-b2d6-140ee0045ec5",
+  "id": "b4018910-acd9-405e-8404-cf264a8b8fcd",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -767,6 +767,139 @@
       },
       "isRLSEnabled": false
     },
+    "deposit.activity_event": {
+      "name": "activity_event",
+      "schema": "deposit",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "deposit_request_id": {
+          "name": "deposit_request_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "activity_event_type",
+          "typeSchema": "deposit",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_kind": {
+          "name": "actor_kind",
+          "type": "activity_actor_kind",
+          "typeSchema": "deposit",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_user_id": {
+          "name": "actor_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "access_link_id": {
+          "name": "access_link_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deposited_file_id": {
+          "name": "deposited_file_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "client_ip": {
+          "name": "client_ip",
+          "type": "inet",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "activity_event_deposit_request_id_idx": {
+          "name": "activity_event_deposit_request_id_idx",
+          "columns": [
+            {
+              "expression": "deposit_request_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "activity_event_client_ip_to_redact_idx": {
+          "name": "activity_event_client_ip_to_redact_idx",
+          "columns": [
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "client_ip IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "activity_event_deposit_request_id_deposit_request_id_fk": {
+          "name": "activity_event_deposit_request_id_deposit_request_id_fk",
+          "tableFrom": "activity_event",
+          "tableTo": "deposit_request",
+          "schemaTo": "deposit",
+          "columnsFrom": [
+            "deposit_request_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "activity_event_actor_user_id_matches_kind": {
+          "name": "activity_event_actor_user_id_matches_kind",
+          "value": "(\"deposit\".\"activity_event\".\"actor_kind\" = 'lawyer') = (\"deposit\".\"activity_event\".\"actor_user_id\" IS NOT NULL)"
+        },
+        "activity_event_client_ip_only_on_entry_attempts": {
+          "name": "activity_event_client_ip_only_on_entry_attempts",
+          "value": "\"deposit\".\"activity_event\".\"client_ip\" IS NULL\n        OR \"deposit\".\"activity_event\".\"type\" IN (\n          'client_pin_rejected',\n          'access_link_blocked',\n          'unusable_access_link_attempted',\n          'deposit_session_opened'\n        )"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "deposit.deposit_request": {
       "name": "deposit_request",
       "schema": "deposit",
@@ -1191,7 +1324,7 @@
         },
         "deposited_file_scanned_at_matches_verdict": {
           "name": "deposited_file_scanned_at_matches_verdict",
-          "value": "(\"deposit\".\"deposited_file\".\"status\" IN ('clean', 'infected')) = (\"deposit\".\"deposited_file\".\"scanned_at\" IS NOT NULL)"
+          "value": "(\"deposit\".\"deposited_file\".\"status\" IN ('clean', 'infected', 'rejected')) = (\"deposit\".\"deposited_file\".\"scanned_at\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": false
@@ -1332,6 +1465,33 @@
         "active",
         "blocked",
         "revoked"
+      ]
+    },
+    "deposit.activity_actor_kind": {
+      "name": "activity_actor_kind",
+      "schema": "deposit",
+      "values": [
+        "lawyer",
+        "client",
+        "system"
+      ]
+    },
+    "deposit.activity_event_type": {
+      "name": "activity_event_type",
+      "schema": "deposit",
+      "values": [
+        "access_link_issued",
+        "access_link_revoked",
+        "access_link_blocked",
+        "unusable_access_link_attempted",
+        "deposit_session_opened",
+        "client_pin_rejected",
+        "deposited_file_received",
+        "deposited_file_removed",
+        "deposited_file_scanned_clean",
+        "deposited_file_scanned_infected",
+        "deposited_file_rejected",
+        "deposited_file_downloaded"
       ]
     },
     "deposit.deposit_request_status": {

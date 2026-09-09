@@ -213,3 +213,10 @@ const OCCUPYING_DEPOSITED_FILE_STATUSES: readonly DepositedFileStatus[] = [
 export function does_deposited_file_occupy_expected_document(file: DepositedFile): boolean {
   return OCCUPYING_DEPOSITED_FILE_STATUSES.includes(file.status);
 }
+
+// `clean` et rien d'autre. Une piece en attente de verdict n'a pas encore ete
+// examinee, une piece infectee ne doit jamais atteindre le poste de l'avocat,
+// et une piece refusee n'a pas d'objet promu a telecharger.
+export function is_deposited_file_downloadable(file: DepositedFile): boolean {
+  return file.status === 'clean';
+}

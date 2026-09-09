@@ -12,6 +12,16 @@ export const DATABASE_CONNECTION: unique symbol = Symbol('DATABASE_CONNECTION');
 
 export type ApplicationDatabase = PostgresJsDatabase<typeof schema>;
 
+export type DatabaseTransaction = Parameters<
+  Parameters<ApplicationDatabase['transaction']>[0]
+>[0];
+
+// Ce sur quoi une ecriture s'execute : la connexion, ou la transaction ouverte
+// par son appelant. Le journal d'activite doit pouvoir s'ecrire DANS la
+// transaction de l'action qu'il documente — un journal ecrit apres coup se perd
+// exactement quand il compte, sur la panne.
+export type DatabaseWriter = ApplicationDatabase | DatabaseTransaction;
+
 export interface DatabaseConnection {
   database: ApplicationDatabase;
   // Fermeture explicite : sans elle, un test qui cree une application laisse

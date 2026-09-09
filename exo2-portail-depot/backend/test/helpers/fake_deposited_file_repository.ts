@@ -3,6 +3,7 @@ import { does_deposited_file_occupy_expected_document } from '../../src/domain/d
 import type {
   DepositedFileRepository,
   NewDepositedFile,
+  OwnedDepositedFile,
 } from '../../src/deposited_file/deposited_file_repository';
 import { ExpectedDocumentAlreadyOccupiedError } from '../../src/deposited_file/deposited_file_repository';
 
@@ -11,6 +12,10 @@ import { ExpectedDocumentAlreadyOccupiedError } from '../../src/deposited_file/d
 // et ne prouveraient rien.
 export class FakeDepositedFileRepository implements DepositedFileRepository {
   readonly files = new Map<string, DepositedFile>();
+  // L'appartenance est portee par deux jointures dans la vraie requete, et le
+  // double n'a ni emplacements ni demandes : les tests qui en ont besoin la
+  // declarent, les autres n'obtiennent rien — comme une piece d'un confrere.
+  readonly ownership = new Map<string, { owner_user_id: string; deposit_request_id: string }>();
   private next_identifier = 1;
 
   seed(...files: readonly DepositedFile[]): void {
@@ -25,6 +30,25 @@ export class FakeDepositedFileRepository implements DepositedFileRepository {
   ): Promise<DepositedFile | null> {
     const file: DepositedFile | undefined = this.files.get(deposited_file_id);
     return file !== undefined && file.access_link_id === access_link_id ? file : null;
+  }
+
+  seed_ownership(
+    deposited_file_id: string,
+    ownership: { owner_user_id: string; deposit_request_id: string },
+  ): void {
+    this.ownership.set(deposited_file_id, ownership);
+  }
+
+  async find_for_owner(
+    deposited_file_id: string,
+    owner_user_id: string,
+  ): Promise<OwnedDepositedFile | null> {
+    const file: DepositedFile | undefined = this.files.get(deposited_file_id);
+    const ownership = this.ownership.get(deposited_file_id);
+
+    return file === undefined || ownership === undefined || ownership.owner_user_id !== owner_user_id
+      ? null
+      : { file, deposit_request_id: ownership.deposit_request_id };
   }
 
   async find_by_id(deposited_file_id: string): Promise<DepositedFile | null> {

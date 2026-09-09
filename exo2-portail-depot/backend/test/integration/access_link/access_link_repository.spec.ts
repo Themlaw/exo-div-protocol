@@ -179,7 +179,7 @@ describe("Depot des liens d'acces", () => {
 
     await expect(
       access_links.revoke_current_link(deposit_request_id, owner_user_id, new Date()),
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
 
     await expect(access_links.find_by_token_hmac('hmac-vol-de-lien')).resolves.toBeNull();
   });
@@ -326,7 +326,7 @@ describe("Depot des liens d'acces", () => {
 
     await expect(
       access_links.revoke_current_link(deposit_request_id, owner_user_id, new Date()),
-    ).resolves.toBe(true);
+    ).resolves.not.toBeNull();
 
     const revoked = await access_links.find_by_token_hmac(issuance.token_hmac);
     expect(revoked?.status).toBe('revoked');
@@ -334,6 +334,6 @@ describe("Depot des liens d'acces", () => {
 
     await expect(
       access_links.revoke_current_link(deposit_request_id, owner_user_id, new Date()),
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
   });
 });

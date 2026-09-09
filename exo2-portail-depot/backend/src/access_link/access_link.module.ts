@@ -30,6 +30,10 @@ import {
   SYSTEM_RANDOM_SOURCE,
   type AccessLinkIssuer,
 } from './access_link_issuer';
+import {
+  ACTIVITY_EVENT_REPOSITORY,
+  type ActivityEventRepository,
+} from '../activity/activity_event_repository';
 import { CLOCK, type Clock } from '../shared/clock';
 import type { RandomSource } from '../domain/presigned_upload';
 
@@ -61,6 +65,7 @@ import type { RandomSource } from '../domain/presigned_upload';
       provide: ACCESS_LINK_ISSUER,
       inject: [
         ACCESS_LINK_REPOSITORY,
+        ACTIVITY_EVENT_REPOSITORY,
         ACCESS_LINK_TOKEN_HASHER,
         CLIENT_PIN_HASHER,
         CLOCK,
@@ -69,6 +74,7 @@ import type { RandomSource } from '../domain/presigned_upload';
       ],
       useFactory: (
         access_links: AccessLinkRepository,
+        activity_events: ActivityEventRepository,
         token_hasher: AccessLinkTokenHasher,
         pin_hasher: PinHasher,
         clock: Clock,
@@ -77,6 +83,7 @@ import type { RandomSource } from '../domain/presigned_upload';
       ): AccessLinkIssuer =>
         new AccessLinkIssuanceService({
           access_links,
+          activity_events,
           token_hasher,
           pin_hasher,
           clock,

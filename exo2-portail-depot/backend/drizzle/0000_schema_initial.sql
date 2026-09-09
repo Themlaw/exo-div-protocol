@@ -6,6 +6,8 @@ CREATE SCHEMA "deposit";
 --> statement-breakpoint
 CREATE TYPE "security"."authentication_failure_kind" AS ENUM('lawyer_login', 'client_pin');--> statement-breakpoint
 CREATE TYPE "deposit"."access_link_status" AS ENUM('active', 'blocked', 'revoked');--> statement-breakpoint
+CREATE TYPE "deposit"."activity_actor_kind" AS ENUM('lawyer', 'client', 'system');--> statement-breakpoint
+CREATE TYPE "deposit"."activity_event_type" AS ENUM('access_link_issued', 'access_link_revoked', 'access_link_blocked', 'unusable_access_link_attempted', 'deposit_session_opened', 'client_pin_rejected', 'deposited_file_received', 'deposited_file_removed', 'deposited_file_scanned_clean', 'deposited_file_scanned_infected', 'deposited_file_rejected', 'deposited_file_downloaded');--> statement-breakpoint
 CREATE TYPE "deposit"."deposit_request_status" AS ENUM('incomplete', 'processing', 'validated', 'blocked', 'expired_incomplete');--> statement-breakpoint
 CREATE TYPE "deposit"."deposited_file_status" AS ENUM('pending_upload', 'pending_scan', 'clean', 'infected', 'rejected');--> statement-breakpoint
 CREATE TABLE "auth"."account" (
@@ -110,6 +112,26 @@ CREATE TABLE "deposit"."access_link" (
         AND ("deposit"."access_link"."status" <> 'revoked' OR "deposit"."access_link"."revoked_at" IS NOT NULL))
 );
 --> statement-breakpoint
+CREATE TABLE "deposit"."activity_event" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"deposit_request_id" uuid NOT NULL,
+	"type" "deposit"."activity_event_type" NOT NULL,
+	"actor_kind" "deposit"."activity_actor_kind" NOT NULL,
+	"actor_user_id" text,
+	"access_link_id" uuid,
+	"deposited_file_id" uuid,
+	"client_ip" "inet",
+	"occurred_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "activity_event_actor_user_id_matches_kind" CHECK (("deposit"."activity_event"."actor_kind" = 'lawyer') = ("deposit"."activity_event"."actor_user_id" IS NOT NULL)),
+	CONSTRAINT "activity_event_client_ip_only_on_entry_attempts" CHECK ("deposit"."activity_event"."client_ip" IS NULL
+        OR "deposit"."activity_event"."type" IN (
+          'client_pin_rejected',
+          'access_link_blocked',
+          'unusable_access_link_attempted',
+          'deposit_session_opened'
+        ))
+);
+--> statement-breakpoint
 CREATE TABLE "deposit"."deposit_request" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"owner_user_id" text NOT NULL,
@@ -154,7 +176,7 @@ CREATE TABLE "deposit"."deposited_file" (
 	CONSTRAINT "deposited_file_declared_size_is_positive" CHECK ("deposit"."deposited_file"."declared_size_bytes" > 0),
 	CONSTRAINT "deposited_file_actual_size_is_positive" CHECK ("deposit"."deposited_file"."actual_size_bytes" IS NULL OR "deposit"."deposited_file"."actual_size_bytes" > 0),
 	CONSTRAINT "deposited_file_uploaded_at_matches_status" CHECK (("deposit"."deposited_file"."status" = 'pending_upload') = ("deposit"."deposited_file"."uploaded_at" IS NULL)),
-	CONSTRAINT "deposited_file_scanned_at_matches_verdict" CHECK (("deposit"."deposited_file"."status" IN ('clean', 'infected')) = ("deposit"."deposited_file"."scanned_at" IS NOT NULL))
+	CONSTRAINT "deposited_file_scanned_at_matches_verdict" CHECK (("deposit"."deposited_file"."status" IN ('clean', 'infected', 'rejected')) = ("deposit"."deposited_file"."scanned_at" IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE TABLE "deposit"."expected_document" (
@@ -173,6 +195,7 @@ CREATE TABLE "deposit"."expected_document" (
 ALTER TABLE "auth"."account" ADD CONSTRAINT "account_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "auth"."session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."access_link" ADD CONSTRAINT "access_link_deposit_request_id_deposit_request_id_fk" FOREIGN KEY ("deposit_request_id") REFERENCES "deposit"."deposit_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "deposit"."activity_event" ADD CONSTRAINT "activity_event_deposit_request_id_deposit_request_id_fk" FOREIGN KEY ("deposit_request_id") REFERENCES "deposit"."deposit_request"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."deposit_request" ADD CONSTRAINT "deposit_request_owner_user_id_user_id_fk" FOREIGN KEY ("owner_user_id") REFERENCES "auth"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."deposit_session" ADD CONSTRAINT "deposit_session_access_link_id_access_link_id_fk" FOREIGN KEY ("access_link_id") REFERENCES "deposit"."access_link"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "deposit"."deposited_file" ADD CONSTRAINT "deposited_file_expected_document_id_expected_document_id_fk" FOREIGN KEY ("expected_document_id") REFERENCES "deposit"."expected_document"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -188,6 +211,8 @@ CREATE INDEX "lawyer_login_failure_by_account_and_ip_last_failed_at_idx" ON "sec
 CREATE UNIQUE INDEX "access_link_token_hmac_key" ON "deposit"."access_link" USING btree ("token_hmac");--> statement-breakpoint
 CREATE UNIQUE INDEX "access_link_one_active_per_request_idx" ON "deposit"."access_link" USING btree ("deposit_request_id") WHERE "deposit"."access_link"."status" = 'active';--> statement-breakpoint
 CREATE INDEX "access_link_deposit_request_id_idx" ON "deposit"."access_link" USING btree ("deposit_request_id","created_at");--> statement-breakpoint
+CREATE INDEX "activity_event_deposit_request_id_idx" ON "deposit"."activity_event" USING btree ("deposit_request_id","occurred_at" DESC NULLS LAST);--> statement-breakpoint
+CREATE INDEX "activity_event_client_ip_to_redact_idx" ON "deposit"."activity_event" USING btree ("occurred_at") WHERE client_ip IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "deposit_request_owner_user_id_idx" ON "deposit"."deposit_request" USING btree ("owner_user_id","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "deposit_session_token_sha256_key" ON "deposit"."deposit_session" USING btree ("token_sha256");--> statement-breakpoint
 CREATE INDEX "deposit_session_access_link_id_idx" ON "deposit"."deposit_session" USING btree ("access_link_id");--> statement-breakpoint

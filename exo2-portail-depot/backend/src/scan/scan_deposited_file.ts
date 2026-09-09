@@ -20,6 +20,8 @@ import {
   detect_mime_type_from_prefix,
 } from '../deposited_file/file_signatures';
 import type { FileScanner } from './clamav_scanner';
+import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import { build_activity_event, type ActivityEventType } from '../domain/activity_event';
 
 export const DEPOSITED_FILE_SCANNER: unique symbol = Symbol('DEPOSITED_FILE_SCANNER');
 export const SCAN_LOG_CONTEXT = 'scan';
@@ -37,6 +39,7 @@ export interface DepositedFileScanner {
 
 export interface DepositedFileScanDependencies {
   deposited_files: DepositedFileRepository;
+  activity_events: ActivityEventRepository;
   expected_documents: ExpectedDocumentRepository;
   object_storage: ObjectStorage;
   file_scanner: FileScanner;
@@ -70,6 +73,11 @@ export class DepositedFileScanService implements DepositedFileScanner {
 
     if (verdict === 'infected') {
       await this.apply_verdict(file, 'infected');
+      await this.journalize(
+        file,
+        'deposited_file_scanned_infected',
+        await this.dependencies.expected_documents.find_by_id(file.expected_document_id),
+      );
       this.dependencies.logger.warn(SCAN_LOG_CONTEXT, 'piece infectee, objet supprime', {
         deposited_file_id: file.id,
       });
@@ -124,11 +132,58 @@ export class DepositedFileScanService implements DepositedFileScanner {
         QUARANTINE_BUCKET_NAME,
         file.object_key,
       );
+      await this.journalize(scanned_file, 'deposited_file_rejected', expected_document);
+      // Le journal dit A L'AVOCAT qu'une piece a ete refusee ; ce `warn` dit a
+      // l'exploitant POURQUOI. Les deux types — annonce et detecte — sont la
+      // seule facon de distinguer un client qui s'est trompe de fichier d'un
+      // envoi maquille. Le nom depose, lui, n'y entre pas : il vient d'un tiers
+      // non authentifie et les journaux sont lus par plus de monde que la base.
+      this.dependencies.logger.warn(SCAN_LOG_CONTEXT, 'piece refusee, objet supprime', {
+        deposited_file_id: file.id,
+        expected_document_id: file.expected_document_id,
+        rejection_reason,
+        declared_mime_type: file.declared_mime_type,
+        detected_mime_type: scanned_file.detected_mime_type,
+      });
       return { kind: 'rejected', reason: rejection_reason };
     }
 
     await this.apply_verdict(scanned_file, 'clean');
+    await this.journalize(scanned_file, 'deposited_file_scanned_clean', expected_document);
     return { kind: 'clean' };
+  }
+
+  // L'acteur est le SYSTEME : personne n'a demande ce verdict, il tombe d'un
+  // travail de fond. L'attribuer au client ferait croire qu'il a lui-meme
+  // declare sa piece saine.
+  //
+  // Le document attendu est PASSE et non relu : c'est lui qui porte la demande,
+  // et l'appelant vient de le charger pour decider du verdict.
+  //
+  // Absent, rien n'est ecrit — et c'est la seule chose possible, pas un
+  // renoncement : un document attendu ne disparait que par la cascade de sa
+  // demande, et un evenement d'audit sur une demande effacee serait refuse par
+  // sa propre clef etrangere. Le jour ou l'avocat pourra supprimer un document
+  // attendu isolement, il faudra retrouver la demande par le lien.
+  private async journalize(
+    file: DepositedFile,
+    type: ActivityEventType,
+    expected_document: ExpectedDocument | null,
+  ): Promise<void> {
+    if (expected_document === null) {
+      return;
+    }
+
+    await this.dependencies.activity_events.record(
+      build_activity_event({
+        deposit_request_id: expected_document.deposit_request_id,
+        type,
+        actor: { kind: 'system' },
+        access_link_id: file.access_link_id,
+        deposited_file_id: file.id,
+        occurred_at: this.dependencies.clock.now(),
+      }),
+    );
   }
 
   // L'objet bouge AVANT que la ligne ne l'annonce sain. Dans l'autre sens, une

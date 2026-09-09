@@ -2,6 +2,8 @@ import { Readable } from 'node:stream';
 import type { PresignedUploadPolicy } from '../../src/domain/presigned_upload';
 import type {
   ObjectStorage,
+  PresignedDownloadRequest,
+  PresignedDownloadTicket,
   PresignedUploadTicket,
   StoredObjectDescription,
 } from '../../src/object_storage/object_storage';
@@ -12,6 +14,7 @@ import type {
 export class FakeObjectStorage implements ObjectStorage {
   readonly buckets = new Map<string, Map<string, Buffer>>();
   readonly deleted_keys: { bucket: string; object_key: string }[] = [];
+  readonly presigned_download_requests: PresignedDownloadRequest[] = [];
   arrival_notifications_configured = true;
 
   put(bucket: string, object_key: string, content: Buffer): void {
@@ -38,6 +41,21 @@ export class FakeObjectStorage implements ObjectStorage {
       upload_url: `https://storage.test/${policy.bucket}`,
       form_fields: { key: policy.object_key, 'Content-Type': declared_mime_type },
       expires_at: policy.expires_at,
+    };
+  }
+
+  // Ne verifie pas que l'objet existe, et c'est delibere : signer est une
+  // operation HORS LIGNE chez MinIO, qui rend une URL pour n'importe quelle
+  // cle. Un double qui refuserait ferait passer des tests que la realite
+  // dementirait.
+  async create_presigned_download(
+    request: PresignedDownloadRequest,
+  ): Promise<PresignedDownloadTicket> {
+    this.presigned_download_requests.push(request);
+
+    return {
+      download_url: `https://storage.test/${request.bucket}/${request.object_key}?signed`,
+      expires_at: new Date(request.issued_at.getTime() + request.lifetime_seconds * 1000),
     };
   }
 

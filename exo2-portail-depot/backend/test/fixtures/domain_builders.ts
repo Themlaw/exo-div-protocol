@@ -1,4 +1,5 @@
 import type { AccessLink } from '../../src/domain/access_link';
+import type { ActivityEvent } from '../../src/domain/activity_event';
 import type { DepositSession } from '../../src/domain/deposit_session';
 import type { DepositedFile } from '../../src/domain/deposited_file';
 import type { ExpectedDocument } from '../../src/domain/expected_document';
@@ -88,6 +89,25 @@ export function build_deposited_file(
     created_at: REFERENCE_NOW,
     uploaded_at: REFERENCE_NOW,
     scanned_at: null,
+    ...overrides,
+  };
+}
+
+// Un evenement DEJA ENREGISTRE, donc porteur d'un identifiant : les fonctions
+// d'expurgation et de resume travaillent sur ce qui est en base, la ou
+// `build_activity_event` construit ce qui va y entrer.
+export function build_recorded_activity_event(
+  overrides: Partial<ActivityEvent> = {},
+): ActivityEvent {
+  return {
+    id: 'activity-event-1',
+    deposit_request_id: 'request-1',
+    type: 'deposited_file_received',
+    actor: { kind: 'client' },
+    access_link_id: 'link-1',
+    deposited_file_id: null,
+    client_ip: null,
+    occurred_at: REFERENCE_NOW,
     ...overrides,
   };
 }

@@ -12,10 +12,18 @@ import {
   UPLOAD_RESERVATION_GRACE_MINUTES,
   type ReconciliationReport,
 } from '../../../src/scan/reconcile_deposits';
+import { CLIENT_IP_RETENTION_DAYS } from '../../../src/domain/activity_event';
+import { FakeActivityEventRepository } from '../../helpers/fake_activity_event_repository';
 import { FakeDepositedFileRepository } from '../../helpers/fake_deposited_file_repository';
+import { FakeExpectedDocumentRepository } from '../../helpers/fake_expected_document_repository';
 import { FakeObjectStorage } from '../../helpers/fake_object_storage';
 import { build_capturing_logger, type CapturingLogger } from '../../helpers/capturing_logger';
-import { REFERENCE_NOW, add_minutes, build_deposited_file } from '../../fixtures/domain_builders';
+import {
+  REFERENCE_NOW,
+  add_minutes,
+  build_deposited_file,
+  build_expected_document,
+} from '../../fixtures/domain_builders';
 
 class RecordingScanQueue implements ScanQueue {
   readonly enqueued_payloads: ScanJobPayload[] = [];
@@ -26,6 +34,7 @@ class RecordingScanQueue implements ScanQueue {
 }
 
 interface ReconciliationHarness {
+  activity_events: FakeActivityEventRepository;
   deposited_files: FakeDepositedFileRepository;
   object_storage: FakeObjectStorage;
   scan_queue: RecordingScanQueue;
@@ -38,13 +47,21 @@ interface ReconciliationHarness {
 // reimplementerait dans le test.
 function build_reconciliation_harness(now: Date = REFERENCE_NOW): ReconciliationHarness {
   const deposited_files = new FakeDepositedFileRepository();
+  const expected_documents = new FakeExpectedDocumentRepository();
+  const activity_events = new FakeActivityEventRepository();
   const object_storage = new FakeObjectStorage();
   const scan_queue = new RecordingScanQueue();
   const logger: CapturingLogger = build_capturing_logger();
   const clock: Clock = { now: (): Date => now };
 
+  // Le document attendu des pieces de fixture : sans lui l'arrivee ne saurait
+  // pas a quelle demande rattacher son evenement, et le journal resterait vide.
+  expected_documents.seed(build_expected_document());
+
   const object_arrivals = new ObjectArrivalRecordingService({
     deposited_files,
+    expected_documents,
+    activity_events,
     object_storage,
     scan_queue,
     clock,
@@ -55,12 +72,14 @@ function build_reconciliation_harness(now: Date = REFERENCE_NOW): Reconciliation
     deposited_files,
     object_storage,
     object_arrivals,
+    activity_events,
     scan_queue,
     clock,
     logger,
   });
 
   return {
+    activity_events,
     deposited_files,
     object_storage,
     scan_queue,
@@ -309,6 +328,7 @@ describe('reconciliation des depots', () => {
       abandoned_reservations_discarded: 1,
       overdue_scans_requeued: 1,
       orphan_objects_collected: 1,
+      client_ips_redacted: 0,
     });
     expect(second_pass).toEqual({
       missed_arrivals_recorded: 0,
@@ -318,6 +338,48 @@ describe('reconciliation des depots', () => {
       // d'unicite de la file qui empeche le doublon, pas le balayage.
       overdue_scans_requeued: 1,
       orphan_objects_collected: 0,
+      client_ips_redacted: 0,
+    });
+  });
+
+  // La retention des adresses voyage avec le balayage : un second ordonnanceur
+  // pour trois lignes serait une piece mobile de plus a surveiller.
+  describe('purge des adresses du journal', () => {
+    it("expurge les adresses passees de duree et laisse l'evenement", async () => {
+      const harness: ReconciliationHarness = build_reconciliation_harness();
+      await harness.activity_events.record({
+        deposit_request_id: 'request-1',
+        type: 'client_pin_rejected',
+        actor: { kind: 'client' },
+        access_link_id: 'link-1',
+        deposited_file_id: null,
+        client_ip: '203.0.113.42',
+        occurred_at: add_minutes(REFERENCE_NOW, -(CLIENT_IP_RETENTION_DAYS + 1) * 24 * 60),
+      });
+
+      const report: ReconciliationReport = await harness.reconcile();
+
+      expect(report.client_ips_redacted).toBe(1);
+      expect(harness.activity_events.recorded_events).toHaveLength(1);
+      expect(harness.activity_events.recorded_events[0]?.client_ip).toBeNull();
+    });
+
+    it('laisse intacte une adresse encore dans sa duree de conservation', async () => {
+      const harness: ReconciliationHarness = build_reconciliation_harness();
+      await harness.activity_events.record({
+        deposit_request_id: 'request-1',
+        type: 'client_pin_rejected',
+        actor: { kind: 'client' },
+        access_link_id: 'link-1',
+        deposited_file_id: null,
+        client_ip: '203.0.113.42',
+        occurred_at: add_minutes(REFERENCE_NOW, -(CLIENT_IP_RETENTION_DAYS - 1) * 24 * 60),
+      });
+
+      const report: ReconciliationReport = await harness.reconcile();
+
+      expect(report.client_ips_redacted).toBe(0);
+      expect(harness.activity_events.recorded_events[0]?.client_ip).toBe('203.0.113.42');
     });
   });
 
@@ -334,6 +396,7 @@ describe('reconciliation des depots', () => {
           abandoned_reservations_discarded: 0,
           overdue_scans_requeued: 0,
           orphan_objects_collected: 0,
+          client_ips_redacted: 0,
         },
       }),
     );

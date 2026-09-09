@@ -17,6 +17,10 @@ import {
   type ExpectedDocumentRepository,
 } from '../deposit/expected_document_repository';
 import { OBJECT_STORAGE, type ObjectStorage } from '../object_storage/object_storage';
+import {
+  ACTIVITY_EVENT_REPOSITORY,
+  type ActivityEventRepository,
+} from '../activity/activity_event_repository';
 import { GraphileScanQueue, SCAN_QUEUE, type ScanQueue } from './scan_queue';
 import {
   DEPOSIT_RECONCILER,
@@ -63,9 +67,19 @@ import {
     },
     {
       provide: OBJECT_ARRIVAL_RECORDER,
-      inject: [DEPOSITED_FILE_REPOSITORY, OBJECT_STORAGE, SCAN_QUEUE, CLOCK, APPLICATION_LOGGER],
+      inject: [
+        DEPOSITED_FILE_REPOSITORY,
+        EXPECTED_DOCUMENT_REPOSITORY,
+        ACTIVITY_EVENT_REPOSITORY,
+        OBJECT_STORAGE,
+        SCAN_QUEUE,
+        CLOCK,
+        APPLICATION_LOGGER,
+      ],
       useFactory: (
         deposited_files: DepositedFileRepository,
+        expected_documents: ExpectedDocumentRepository,
+        activity_events: ActivityEventRepository,
         object_storage: ObjectStorage,
         scan_queue: ScanQueue,
         clock: Clock,
@@ -73,6 +87,8 @@ import {
       ): ObjectArrivalRecorder =>
         new ObjectArrivalRecordingService({
           deposited_files,
+          expected_documents,
+          activity_events,
           object_storage,
           scan_queue,
           clock,
@@ -84,6 +100,7 @@ import {
       inject: [
         DEPOSITED_FILE_REPOSITORY,
         EXPECTED_DOCUMENT_REPOSITORY,
+        ACTIVITY_EVENT_REPOSITORY,
         OBJECT_STORAGE,
         FILE_SCANNER,
         CLOCK,
@@ -92,6 +109,7 @@ import {
       useFactory: (
         deposited_files: DepositedFileRepository,
         expected_documents: ExpectedDocumentRepository,
+        activity_events: ActivityEventRepository,
         object_storage: ObjectStorage,
         file_scanner: FileScanner,
         clock: Clock,
@@ -99,6 +117,7 @@ import {
       ): DepositedFileScanner =>
         new DepositedFileScanService({
           deposited_files,
+          activity_events,
           expected_documents,
           object_storage,
           file_scanner,
@@ -112,6 +131,7 @@ import {
         DEPOSITED_FILE_REPOSITORY,
         OBJECT_STORAGE,
         OBJECT_ARRIVAL_RECORDER,
+        ACTIVITY_EVENT_REPOSITORY,
         SCAN_QUEUE,
         CLOCK,
         APPLICATION_LOGGER,
@@ -120,6 +140,7 @@ import {
         deposited_files: DepositedFileRepository,
         object_storage: ObjectStorage,
         object_arrivals: ObjectArrivalRecorder,
+        activity_events: ActivityEventRepository,
         scan_queue: ScanQueue,
         clock: Clock,
         logger: ApplicationLogger,
@@ -128,6 +149,7 @@ import {
           deposited_files,
           object_storage,
           object_arrivals,
+          activity_events,
           scan_queue,
           clock,
           logger,

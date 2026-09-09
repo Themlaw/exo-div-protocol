@@ -13,6 +13,8 @@ import type { DepositedFileRepository } from '../deposited_file/deposited_file_r
 import type { ApplicationLogger } from '../shared/logging/application_logger';
 import type { ObjectArrivalRecorder } from './record_object_arrival';
 import type { ScanQueue } from './scan_queue';
+import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import { CLIENT_IP_RETENTION_DAYS } from '../domain/activity_event';
 
 export const DEPOSIT_RECONCILER: unique symbol = Symbol('DEPOSIT_RECONCILER');
 export const RECONCILIATION_LOG_CONTEXT = 'reconciliation';
@@ -33,6 +35,7 @@ export interface ReconciliationReport {
   abandoned_reservations_discarded: number;
   overdue_scans_requeued: number;
   orphan_objects_collected: number;
+  client_ips_redacted: number;
 }
 
 export interface DepositReconciler {
@@ -43,6 +46,7 @@ export interface DepositReconciliationDependencies {
   deposited_files: DepositedFileRepository;
   object_storage: ObjectStorage;
   object_arrivals: ObjectArrivalRecorder;
+  activity_events: ActivityEventRepository;
   scan_queue: ScanQueue;
   clock: Clock;
   logger: ApplicationLogger;
@@ -68,11 +72,13 @@ export class DepositReconciliationService implements DepositReconciler {
     const arrivals = await this.recover_missed_arrivals();
     const overdue_scans_requeued: number = await this.requeue_overdue_scans();
     const orphan_objects_collected: number = await this.collect_stale_quarantine_objects();
+    const client_ips_redacted: number = await this.redact_expired_client_ips();
 
     const report: ReconciliationReport = {
       ...arrivals,
       overdue_scans_requeued,
       orphan_objects_collected,
+      client_ips_redacted,
     };
 
     // Toujours journalise, meme quand tout est a zero : c'est la seule preuve
@@ -83,6 +89,19 @@ export class DepositReconciliationService implements DepositReconciler {
     });
 
     return report;
+  }
+
+  // La retention des adresses est un travail de fond de plus, et il n'a rien a
+  // voir avec le scan : il vit ici parce qu'un second ordonnanceur pour trois
+  // lignes serait une piece mobile de plus a surveiller. L'evenement RESTE, seule
+  // l'adresse part — un journal d'audit qui s'auto-detruit ne prouve rien.
+  private async redact_expired_client_ips(): Promise<number> {
+    const redact_before: Date = new Date(
+      this.dependencies.clock.now().getTime() -
+        CLIENT_IP_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    return this.dependencies.activity_events.redact_client_ip_recorded_before(redact_before);
   }
 
   // Une piece reste en `pending_upload` alors que son objet est bien arrive

@@ -1,3 +1,4 @@
+import { FakeActivityEventRepository } from '../../helpers/fake_activity_event_repository';
 import {
   AccessLinkIssuanceService,
   CLIENT_DEPOSIT_PATH,
@@ -11,6 +12,7 @@ import type { AccessLink } from '../../../src/domain/access_link';
 import type { PinHasher } from '../../../src/domain/verify_client_pin';
 import type { RandomSource } from '../../../src/domain/presigned_upload';
 import { DEFAULT_SECURITY_POLICY } from '../../../src/domain/security_policy';
+import type { NewActivityEvent } from '../../../src/domain/activity_event';
 
 const ISSUANCE_INPUT = {
   deposit_request_id: '11111111-2222-3333-4444-555555555555',
@@ -41,6 +43,7 @@ function build_issuance_service(options: { ownership_confirmed: boolean }): {
   service: AccessLinkIssuanceService;
   hashing_call_count: () => number;
   random_draw_count: () => number;
+  activity_events: FakeActivityEventRepository;
 } {
   let hashing_call_count = 0;
   let random_draw_count = 0;
@@ -66,12 +69,15 @@ function build_issuance_service(options: { ownership_confirmed: boolean }): {
       build_access_link_from_issuance(input.issuance),
     find_by_token_hmac: async (): Promise<AccessLink | null> => null,
     save_attempt_outcome: async (): Promise<boolean> => true,
-    revoke_current_link: async (): Promise<boolean> => true,
+    revoke_current_link: async (): Promise<string | null> => 'link-revoque',
   };
+
+  const activity_events = new FakeActivityEventRepository();
 
   return {
     service: new AccessLinkIssuanceService({
       access_links,
+      activity_events,
       token_hasher: {
         fingerprint_token: (token: string) => ({
           token_hmac: `hmac-de-${token}`,
@@ -85,6 +91,7 @@ function build_issuance_service(options: { ownership_confirmed: boolean }): {
     }),
     hashing_call_count: (): number => hashing_call_count,
     random_draw_count: (): number => random_draw_count,
+    activity_events,
   };
 }
 
@@ -121,5 +128,31 @@ describe("AccessLinkIssuanceService", () => {
     expect(delivery.pin).toHaveLength(DEFAULT_SECURITY_POLICY.pin_length);
     expect(delivery.message).toContain(delivery.pin);
     expect(hashing_call_count()).toBe(1);
+  });
+
+  it("journalise l emission au nom de l avocat, en portant l identifiant du lien emis", async () => {
+    const { service, activity_events } = build_issuance_service({ ownership_confirmed: true });
+
+    await service.issue_for_deposit_request(ISSUANCE_INPUT);
+
+    expect(activity_events.recorded_events).toEqual<NewActivityEvent[]>([
+      {
+        deposit_request_id: ISSUANCE_INPUT.deposit_request_id,
+        type: 'access_link_issued',
+        actor: { kind: 'lawyer', user_id: ISSUANCE_INPUT.owner_user_id },
+        access_link_id: 'link-1',
+        deposited_file_id: null,
+        client_ip: null,
+        occurred_at: new Date('2026-03-12T10:00:00.000Z'),
+      },
+    ]);
+  });
+
+  it("ne journalise rien quand la demande n'appartient pas au demandeur", async () => {
+    const { service, activity_events } = build_issuance_service({ ownership_confirmed: false });
+
+    await service.issue_for_deposit_request(ISSUANCE_INPUT);
+
+    expect(activity_events.recorded_types()).toEqual([]);
   });
 });

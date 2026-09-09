@@ -1,6 +1,6 @@
 import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import type { ApplicationDatabase } from '../db/database_connection';
-import { deposited_file, expected_document } from '../db/schema/deposit_schema';
+import { deposit_request, deposited_file, expected_document } from '../db/schema/deposit_schema';
 import type { DepositedFile, DepositedFileStatus } from '../domain/deposited_file';
 
 export const DEPOSITED_FILE_REPOSITORY: unique symbol = Symbol('DEPOSITED_FILE_REPOSITORY');
@@ -30,6 +30,14 @@ const OCCUPYING_STATUSES: readonly DepositedFileStatus[] = ['pending_scan', 'cle
 
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// La piece ET la demande a laquelle elle appartient. Le second champ n'est pas
+// un confort : c'est lui qui permet de verifier que l'URL empruntee designe bien
+// le dossier ou la piece vit, et de journaliser sous la bonne demande.
+export interface OwnedDepositedFile {
+  file: DepositedFile;
+  deposit_request_id: string;
+}
+
 export interface DepositedFileRepository {
   // L'appartenance est un PREDICAT DE REQUETE : la piece n'est rendue que si
   // elle est bien celle de ce lien-la. Un test fait apres coup sur une ligne
@@ -40,6 +48,14 @@ export interface DepositedFileRepository {
   ): Promise<DepositedFile | null>;
 
   list_for_deposit_request(deposit_request_id: string): Promise<DepositedFile[]>;
+
+  // L'appartenance de l'AVOCAT, portee jusqu'a la demande par deux jointures.
+  // La verifier apres coup sur une ligne deja lue serait un test qu'un appelant
+  // distrait oublierait, et l'oubli ouvrirait la piece d'un confrere.
+  find_for_owner(
+    deposited_file_id: string,
+    owner_user_id: string,
+  ): Promise<OwnedDepositedFile | null>;
 
   // La piece qui OCCUPE l'emplacement, s'il y en a une. L'index unique partiel
   // ne peut pas tenir ce role a lui seul : une nouvelle reservation entre en
@@ -104,6 +120,32 @@ export class DrizzleDepositedFileRepository implements DepositedFileRepository {
 
     const found = rows[0];
     return found === undefined ? null : to_domain_deposited_file(found);
+  }
+
+  async find_for_owner(
+    deposited_file_id: string,
+    owner_user_id: string,
+  ): Promise<OwnedDepositedFile | null> {
+    if (!UUID_SHAPE.test(deposited_file_id)) {
+      return null;
+    }
+
+    const rows = await this.database
+      .select({
+        file: deposited_file,
+        deposit_request_id: deposit_request.id,
+      })
+      .from(deposited_file)
+      .innerJoin(expected_document, eq(deposited_file.expected_document_id, expected_document.id))
+      .innerJoin(deposit_request, eq(expected_document.deposit_request_id, deposit_request.id))
+      .where(
+        and(eq(deposited_file.id, deposited_file_id), eq(deposit_request.owner_user_id, owner_user_id)),
+      );
+
+    const found = rows[0];
+    return found === undefined
+      ? null
+      : { file: to_domain_deposited_file(found.file), deposit_request_id: found.deposit_request_id };
   }
 
   async find_by_id(deposited_file_id: string): Promise<DepositedFile | null> {

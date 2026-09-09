@@ -1,3 +1,5 @@
+import { FakeActivityEventRepository } from '../../helpers/fake_activity_event_repository';
+import { build_capturing_logger, type CapturingLogger } from '../../helpers/capturing_logger';
 import {
   CLIENT_DEPOSIT_SESSION_LIFETIME_SECONDS,
   DepositLinkUnlockService,
@@ -15,6 +17,7 @@ import type { AccessLinkRepository } from '../../../src/access_link/access_link_
 import type { AccessLink } from '../../../src/domain/access_link';
 import type { PinHasher } from '../../../src/domain/verify_client_pin';
 import type { DepositSession } from '../../../src/domain/deposit_session';
+import type { NewActivityEvent } from '../../../src/domain/activity_event';
 import { build_access_link, REFERENCE_NOW } from '../../fixtures/domain_builders';
 
 const CLIENT_IP = '203.0.113.7';
@@ -25,6 +28,8 @@ interface UnlockHarness {
   recorded_failure_count: () => number;
   saved_attempt_count: () => number;
   opened_session_count: () => number;
+  activity_events: FakeActivityEventRepository;
+  logger: CapturingLogger;
 }
 
 function build_unlock_harness(options: {
@@ -37,6 +42,8 @@ function build_unlock_harness(options: {
   let recorded_failure_count = 0;
   let saved_attempt_count = 0;
   let opened_session_count = 0;
+  const activity_events = new FakeActivityEventRepository();
+  const logger: CapturingLogger = build_capturing_logger();
 
   const pin_hasher: PinHasher = {
     hash: async (): Promise<string> => {
@@ -57,7 +64,7 @@ function build_unlock_harness(options: {
       saved_attempt_count += 1;
       return options.attempt_is_recorded !== false;
     },
-    revoke_current_link: async (): Promise<boolean> => true,
+    revoke_current_link: async (): Promise<string | null> => 'link-revoque',
   };
 
   const deposit_sessions: DepositSessionRepository = {
@@ -82,6 +89,7 @@ function build_unlock_harness(options: {
   return {
     service: new DepositLinkUnlockService({
       access_links,
+      activity_events,
       deposit_sessions,
       token_hasher: {
         fingerprint_token: (token: string) => ({
@@ -93,11 +101,14 @@ function build_unlock_harness(options: {
       throttle_store,
       clock: { now: (): Date => REFERENCE_NOW },
       random_source: { bytes: (length: number): Buffer => Buffer.alloc(length, 3) },
+      logger,
     }),
     hashing_call_count: (): number => hashing_call_count,
     recorded_failure_count: (): number => recorded_failure_count,
     saved_attempt_count: (): number => saved_attempt_count,
     opened_session_count: (): number => opened_session_count,
+    activity_events,
+    logger,
   };
 }
 
@@ -222,5 +233,120 @@ describe('DepositLinkUnlockService', () => {
     });
 
     await expect(unlock_with(harness)).resolves.toEqual({ kind: 'refused' });
+  });
+
+  it('journalise le PIN refuse avec l adresse du client', async () => {
+    const link: AccessLink = build_access_link({ max_pin_attempts: 5, failed_pin_attempts: 1 });
+    const harness = build_unlock_harness({ link, pin_is_correct: false });
+
+    await unlock_with(harness);
+
+    expect(harness.activity_events.recorded_events).toEqual<NewActivityEvent[]>([
+      {
+        deposit_request_id: link.deposit_request_id,
+        type: 'client_pin_rejected',
+        actor: { kind: 'client' },
+        access_link_id: link.id,
+        deposited_file_id: null,
+        client_ip: CLIENT_IP,
+        occurred_at: REFERENCE_NOW,
+      },
+    ]);
+  });
+
+  // L'essai perdu vient AVANT le basculement : c'est lui qui le provoque, et
+  // l'ordre inverse raconterait un lien bloque sans cause.
+  it('journalise l essai perdu puis le blocage, dans cet ordre, sur l essai qui atteint le plafond', async () => {
+    const harness = build_unlock_harness({
+      link: build_access_link({ max_pin_attempts: 5, failed_pin_attempts: 4 }),
+      pin_is_correct: false,
+    });
+
+    await unlock_with(harness);
+
+    expect(harness.activity_events.recorded_types()).toEqual([
+      'client_pin_rejected',
+      'access_link_blocked',
+    ]);
+  });
+
+  // Le journal raconte le BASCULEMENT, pas l etat : sans cela, marteler un lien
+  // deja bloque ferait autant d evenements de blocage que d essais.
+  // Chaque essai sur un lien verrouille est un fait distinct : c'est ce qui
+  // explique a l'avocat pourquoi son client n'a jamais rien depose. Ce n'est
+  // PAS un `access_link_blocked`, qui date le basculement et n'arrive qu'une
+  // fois.
+  it('journalise chaque tentative visant un lien deja bloque', async () => {
+    const link: AccessLink = build_access_link({ status: 'blocked' });
+    const harness = build_unlock_harness({ link });
+
+    await unlock_with(harness);
+    await unlock_with(harness);
+
+    expect(harness.activity_events.recorded_types()).toEqual([
+      'unusable_access_link_attempted',
+      'unusable_access_link_attempted',
+    ]);
+    expect(harness.activity_events.recorded_events[0]).toMatchObject({
+      access_link_id: link.id,
+      client_ip: CLIENT_IP,
+    });
+  });
+
+  it('journalise l ouverture de session avec l adresse du client sur un deverrouillage reussi', async () => {
+    const link: AccessLink = build_access_link();
+    const harness = build_unlock_harness({ link, pin_is_correct: true });
+
+    await unlock_with(harness);
+
+    expect(harness.activity_events.recorded_events).toEqual<NewActivityEvent[]>([
+      {
+        deposit_request_id: link.deposit_request_id,
+        type: 'deposit_session_opened',
+        actor: { kind: 'client' },
+        access_link_id: link.id,
+        deposited_file_id: null,
+        client_ip: CLIENT_IP,
+        occurred_at: REFERENCE_NOW,
+      },
+    ]);
+  });
+
+  // Un token inconnu ne designe aucune demande : il n existe aucun journal ou
+  // l inscrire. C est le compteur par adresse qui porte la detection de balayage.
+  it('ne journalise rien sur un jeton inconnu', async () => {
+    const harness = build_unlock_harness({ link: null });
+
+    await unlock_with(harness);
+
+    expect(harness.activity_events.recorded_types()).toEqual([]);
+  });
+
+  // La tentative EST inscrite — elle a eu lieu, et elle explique pourquoi rien
+  // n'a ete depose — mais pas comme un PIN refuse : aucun code n'a ete verifie
+  // sur un lien mort, et l'ecrire affirmerait une tentative qui n'a pas eu lieu.
+  it.each([
+    ['revoque', build_access_link({ status: 'revoked', revoked_at: REFERENCE_NOW })],
+    ['expire', build_access_link({ expires_at: new Date(REFERENCE_NOW.getTime() - 1) })],
+  ])('journalise la tentative sur un lien %s sans inventer de PIN refuse', async (_label, link) => {
+    const harness = build_unlock_harness({ link });
+
+    await unlock_with(harness);
+
+    expect(harness.activity_events.recorded_types()).toEqual([
+      'unusable_access_link_attempted',
+    ]);
+  });
+
+  it('ne journalise rien quand la limitation par adresse refuse la tentative', async () => {
+    const harness = build_unlock_harness({
+      link: build_access_link(),
+      pin_is_correct: true,
+      recent_ip_failures: CLIENT_PIN_IP_RATE_LIMIT_BOUNDS.max_failed_attempts_per_window,
+    });
+
+    await unlock_with(harness);
+
+    expect(harness.activity_events.recorded_types()).toEqual([]);
   });
 });

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   check,
   index,
+  inet,
   integer,
   pgSchema,
   text,
@@ -10,6 +11,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { auth_user } from './auth_schema';
+import { ACTIVITY_EVENT_TYPES } from '../../domain/activity_event';
 import { EXPECTED_DOCUMENT_MAX_SIZE_BOUNDS } from '../../domain/expected_document';
 import { SECURITY_POLICY_BOUNDS } from '../../domain/security_policy';
 
@@ -318,11 +320,97 @@ export const deposited_file = deposit_schema.table(
       'deposited_file_uploaded_at_matches_status',
       sql`(${table.status} = 'pending_upload') = (${table.uploaded_at} IS NULL)`,
     ),
-    // Seuls `clean` et `infected` sont des verdicts. Dater un `pending_scan`
-    // ferait passer pour examine un objet que personne n'a ouvert.
+    // Trois issues sont des verdicts, et `rejected` en est un : la piece A ETE
+    // ouverte — on a lu son prefixe et detecte son type reel — et le rejet dit
+    // « je l'ai regardee, elle n'est pas ce qu'elle pretend ». Ce que la
+    // contrainte interdit, c'est de dater ce que PERSONNE n'a ouvert :
+    // `pending_upload` et `pending_scan`.
     check(
       'deposited_file_scanned_at_matches_verdict',
-      sql`(${table.status} IN ('clean', 'infected')) = (${table.scanned_at} IS NOT NULL)`,
+      sql`(${table.status} IN ('clean', 'infected', 'rejected')) = (${table.scanned_at} IS NOT NULL)`,
+    ),
+  ],
+);
+
+// L'enumeration vient du DOMAINE, elle n'est pas recopiee : un douzieme type
+// ajoute la-bas et oublie ici passerait la compilation et echouerait a
+// l'insertion, en production.
+export const activity_event_type = deposit_schema.enum(
+  'activity_event_type',
+  ACTIVITY_EVENT_TYPES,
+);
+
+export const activity_actor_kind = deposit_schema.enum('activity_actor_kind', [
+  'lawyer',
+  'client',
+  'system',
+]);
+
+// Le JOURNAL D'AUDIT. Il documente ce qui s'est passe, donc il doit survivre a
+// ce qu'il documente : une piece retiree, un lien revoque, un fichier efface
+// gardent leur histoire ici.
+export const activity_event = deposit_schema.table(
+  'activity_event',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // La SEULE clef etrangere de la table, et la cascade y est voulue : le
+    // journal documente une demande, il n'a pas de sens sans elle, et
+    // l'effacement d'un dossier doit emporter sa trace.
+    deposit_request_id: uuid('deposit_request_id')
+      .notNull()
+      .references(() => deposit_request.id, { onDelete: 'cascade' }),
+    type: activity_event_type('type').notNull(),
+    actor_kind: activity_actor_kind('actor_kind').notNull(),
+    // `text` comme partout ou l'on designe un compte : les identifiants de
+    // BetterAuth sont des chaines.
+    actor_user_id: text('actor_user_id'),
+    // Les SUJETS de l'evenement. Volontairement SANS clef etrangere : une piece
+    // se supprime, et une cascade effacerait l'evenement « piece retiree » en
+    // meme temps que la piece qu'il documente. Un journal qui disparait avec
+    // son sujet n'est pas un journal.
+    access_link_id: uuid('access_link_id'),
+    deposited_file_id: uuid('deposited_file_id'),
+    // `inet` et non `text` : Postgres valide la forme, sait comparer par reseau,
+    // et rend impossible d'y ecrire autre chose qu'une adresse.
+    client_ip: inet('client_ip'),
+    occurred_at: timestamp('occurred_at', { withTimezone: true, mode: 'date' })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Le predicat exact de la lecture du journal : une demande, du plus recent
+    // au plus ancien. Sans l'ordre dans l'index, chaque ouverture du dashboard
+    // trierait la table.
+    index('activity_event_deposit_request_id_idx').on(
+      table.deposit_request_id,
+      table.occurred_at.desc(),
+    ),
+    // La purge ne balaie que ce qui porte encore une adresse. Un index partiel
+    // parce que ces lignes-la sont une minorite qui fond avec le temps : un
+    // index complet ferait relire la table entiere toutes les quinze minutes.
+    index('activity_event_client_ip_to_redact_idx')
+      .on(table.occurred_at)
+      .where(sql`client_ip IS NOT NULL`),
+    // Un evenement d'avocat porte son compte, les deux autres n'en portent
+    // jamais : sans cette contrainte, un evenement client anonyme et un
+    // evenement systeme seraient indepartageables a la lecture.
+    check(
+      'activity_event_actor_user_id_matches_kind',
+      sql`(${table.actor_kind} = 'lawyer') = (${table.actor_user_id} IS NOT NULL)`,
+    ),
+    // Le jumeau, cote moteur, de la liste blanche du domaine. La garde
+    // applicative peut etre contournee par un futur appelant qui ecrirait
+    // directement ; celle-ci non. Les trois types decrivent tous une tentative
+    // d'entree, seul cas ou l'adresse apprend quelque chose.
+    check(
+      'activity_event_client_ip_only_on_entry_attempts',
+      sql`${table.client_ip} IS NULL
+        OR ${table.type} IN (
+          'client_pin_rejected',
+          'access_link_blocked',
+          'unusable_access_link_attempted',
+          'deposit_session_opened'
+        )`,
     ),
   ],
 );

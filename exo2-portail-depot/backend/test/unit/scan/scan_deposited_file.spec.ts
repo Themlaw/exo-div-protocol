@@ -1,7 +1,6 @@
 import type { Readable } from 'node:stream';
 import type { DepositedFile, ScanVerdict } from '../../../src/domain/deposited_file';
-import type { ExpectedDocument } from '../../../src/domain/expected_document';
-import type { ExpectedDocumentRepository } from '../../../src/deposit/expected_document_repository';
+import type { NewActivityEvent } from '../../../src/domain/activity_event';
 import {
   QUARANTINE_BUCKET_NAME,
   VERIFIED_BUCKET_NAME,
@@ -9,11 +8,14 @@ import {
 import type { FileScanner } from '../../../src/scan/clamav_scanner';
 import {
   DepositedFileScanService,
+  SCAN_LOG_CONTEXT,
   type ScanOutcome,
 } from '../../../src/scan/scan_deposited_file';
 import type { Clock } from '../../../src/shared/clock';
 import { build_capturing_logger, type CapturingLogger } from '../../helpers/capturing_logger';
+import { FakeActivityEventRepository } from '../../helpers/fake_activity_event_repository';
 import { FakeDepositedFileRepository } from '../../helpers/fake_deposited_file_repository';
+import { FakeExpectedDocumentRepository } from '../../helpers/fake_expected_document_repository';
 import { FakeObjectStorage } from '../../helpers/fake_object_storage';
 import {
   REFERENCE_NOW,
@@ -27,20 +29,6 @@ const PNG_CONTENT: Buffer = Buffer.concat([
   Buffer.from('une photo', 'ascii'),
 ]);
 const UNRECOGNIZED_CONTENT: Buffer = Buffer.from('des octets qu aucune signature ne nomme', 'ascii');
-
-class FakeExpectedDocumentRepository implements ExpectedDocumentRepository {
-  private readonly documents = new Map<string, ExpectedDocument>();
-
-  seed(...documents: readonly ExpectedDocument[]): void {
-    for (const document of documents) {
-      this.documents.set(document.id, document);
-    }
-  }
-
-  async find_by_id(expected_document_id: string): Promise<ExpectedDocument | null> {
-    return this.documents.get(expected_document_id) ?? null;
-  }
-}
 
 class FixedVerdictFileScanner implements FileScanner {
   scan_call_count = 0;
@@ -67,6 +55,7 @@ interface ScanTestContext {
   service: DepositedFileScanService;
   deposited_files: WriteCountingDepositedFileRepository;
   expected_documents: FakeExpectedDocumentRepository;
+  activity_events: FakeActivityEventRepository;
   object_storage: FakeObjectStorage;
   file_scanner: FixedVerdictFileScanner;
   logger: CapturingLogger;
@@ -77,6 +66,7 @@ function build_scan_test_context(
   deposited_files: WriteCountingDepositedFileRepository = new WriteCountingDepositedFileRepository(),
 ): ScanTestContext {
   const expected_documents = new FakeExpectedDocumentRepository();
+  const activity_events = new FakeActivityEventRepository();
   const object_storage = new FakeObjectStorage();
   const file_scanner = new FixedVerdictFileScanner(verdict);
   const logger: CapturingLogger = build_capturing_logger();
@@ -86,6 +76,7 @@ function build_scan_test_context(
     service: new DepositedFileScanService({
       deposited_files,
       expected_documents,
+      activity_events,
       object_storage,
       file_scanner,
       clock,
@@ -93,6 +84,7 @@ function build_scan_test_context(
     }),
     deposited_files,
     expected_documents,
+    activity_events,
     object_storage,
     file_scanner,
     logger,
@@ -197,6 +189,40 @@ describe('DepositedFileScanService', () => {
     expect(context.object_storage.keys_of(QUARANTINE_BUCKET_NAME)).toEqual([]);
   });
 
+  // Le journal dit a l'avocat QU'UNE piece a ete refusee ; l'exploitant, lui, a
+  // besoin de savoir POURQUOI. Sans les deux types, un client qui s'est trompe
+  // de fichier et un envoi maquille se ressemblent dans les journaux.
+  it("journalise le rejet avec le type annonce et le type detecte, jamais le nom depose", async () => {
+    const context: ScanTestContext = build_scan_test_context('clean');
+    const file: DepositedFile = build_deposited_file({
+      declared_mime_type: 'application/pdf',
+      detected_mime_type: null,
+      display_filename: 'facture_maquillee.pdf',
+    });
+    seed_quarantined_file(context, file, PNG_CONTENT);
+    context.expected_documents.seed(build_expected_document());
+
+    await context.service.scan(file.id);
+
+    expect(context.logger.entries_at_level('warn')).toEqual([
+      {
+        level: 'warn',
+        context: SCAN_LOG_CONTEXT,
+        message: 'piece refusee, objet supprime',
+        fields: {
+          deposited_file_id: file.id,
+          expected_document_id: file.expected_document_id,
+          rejection_reason: 'detected_mime_type_mismatch',
+          declared_mime_type: 'application/pdf',
+          detected_mime_type: 'image/png',
+        },
+      },
+    ]);
+    // Le nom vient d'un tiers non authentifie, et les journaux sont lus par
+    // plus de monde que la base.
+    expect(JSON.stringify(context.logger.captured_entries)).not.toContain('facture_maquillee');
+  });
+
   it('rejette la piece dont l\'emplacement attendu a disparu : plus aucune liste blanche ne l\'autorise', async () => {
     const context: ScanTestContext = build_scan_test_context('clean');
     const file: DepositedFile = build_deposited_file({ detected_mime_type: null });
@@ -250,4 +276,83 @@ describe('DepositedFileScanService', () => {
     expect(context.object_storage.keys_of(VERIFIED_BUCKET_NAME)).toEqual([file.object_key]);
     expect(context.object_storage.keys_of(QUARANTINE_BUCKET_NAME)).toEqual([]);
   });
+
+  it('journalise un verdict infecte au nom du systeme, rattache a la demande du document attendu', async () => {
+    const context: ScanTestContext = build_scan_test_context('infected');
+    const file: DepositedFile = build_deposited_file({ detected_mime_type: null });
+    seed_quarantined_file(context, file, PDF_CONTENT);
+    context.expected_documents.seed(build_expected_document());
+
+    await context.service.scan(file.id);
+
+    expect(context.activity_events.recorded_events).toEqual<NewActivityEvent[]>([
+      {
+        deposit_request_id: build_expected_document().deposit_request_id,
+        type: 'deposited_file_scanned_infected',
+        actor: { kind: 'system' },
+        access_link_id: file.access_link_id,
+        deposited_file_id: file.id,
+        client_ip: null,
+        occurred_at: REFERENCE_NOW,
+      },
+    ]);
+  });
+
+  it('journalise un rejet de conformite au nom du systeme', async () => {
+    const context: ScanTestContext = build_scan_test_context('clean');
+    const file: DepositedFile = build_deposited_file({
+      declared_mime_type: 'application/pdf',
+      detected_mime_type: null,
+    });
+    seed_quarantined_file(context, file, PNG_CONTENT);
+    context.expected_documents.seed(build_expected_document());
+
+    await context.service.scan(file.id);
+
+    expect(context.activity_events.recorded_types()).toEqual(['deposited_file_rejected']);
+    expect(context.activity_events.recorded_events[0]?.actor).toEqual({ kind: 'system' });
+  });
+
+  it('journalise une piece saine et conforme au nom du systeme', async () => {
+    const context: ScanTestContext = build_scan_test_context('clean');
+    const file: DepositedFile = build_deposited_file({ detected_mime_type: null, scanned_at: null });
+    seed_quarantined_file(context, file, PDF_CONTENT);
+    context.expected_documents.seed(build_expected_document());
+
+    await context.service.scan(file.id);
+
+    expect(context.activity_events.recorded_types()).toEqual(['deposited_file_scanned_clean']);
+    expect(context.activity_events.recorded_events[0]?.actor).toEqual({ kind: 'system' });
+  });
+
+  // Rien n'a ete tranche : inscrire un verdict que le scanner n'a jamais rendu
+  // ferait mentir l'audit sur une piece encore en attente d'examen.
+  it('ne journalise aucun verdict quand le scanner est indisponible', async () => {
+    const context: ScanTestContext = build_scan_test_context('scanner_unavailable');
+    const file: DepositedFile = build_deposited_file({ scanned_at: null });
+    seed_quarantined_file(context, file, PDF_CONTENT);
+    context.expected_documents.seed(build_expected_document());
+
+    await context.service.scan(file.id);
+
+    expect(context.activity_events.recorded_types()).toEqual([]);
+  });
+
+  it.each(['piece-introuvable', 'piece-deja-tranchee'] as const)(
+    'ne journalise rien quand il n\'y a plus rien a scanner (%s)',
+    async (situation) => {
+      const context: ScanTestContext = build_scan_test_context('clean');
+      context.expected_documents.seed(build_expected_document());
+      const file: DepositedFile = build_deposited_file({ status: 'clean' });
+
+      if (situation === 'piece-deja-tranchee') {
+        seed_quarantined_file(context, file, PDF_CONTENT);
+      }
+
+      const outcome: ScanOutcome = await context.service.scan(file.id);
+
+      expect(outcome).toEqual({ kind: 'nothing_to_scan' });
+      expect(context.activity_events.recorded_types()).toEqual([]);
+    },
+  );
 });

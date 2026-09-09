@@ -106,7 +106,12 @@ describe('Depot des pieces deposees', () => {
       // La contrainte de base lie la date d'arrivee au statut : un objet non
       // arrive n'a pas de date, tout autre statut en a une.
       uploaded_at: status === 'pending_upload' ? null : REFERENCE_NOW,
-      scanned_at: status === 'clean' || status === 'infected' ? REFERENCE_NOW : null,
+      // `rejected` est un verdict comme les deux autres : la piece a ete
+      // ouverte, son prefixe lu, son type reel detecte.
+      scanned_at:
+        status === 'clean' || status === 'infected' || status === 'rejected'
+          ? REFERENCE_NOW
+          : null,
       ...file_overrides,
     };
   }
@@ -233,5 +238,42 @@ describe('Depot des pieces deposees', () => {
     ]);
 
     expect(counts.get(prepared.deposit_request_id)).toBe(1);
+  });
+
+  describe('contraintes du moteur', () => {
+    // Le cas qui bloquait la file : le scan datait un rejet et Postgres refusait
+    // la ligne, donc le travail jetait, donc il etait reessaye — indefiniment.
+    // Une piece maquillee immobilisait la file de scan pour toujours.
+    it("accepte une piece refusee et datee : le rejet EST un verdict", async () => {
+      const prepared = await prepare_deposit_request();
+
+      const rejected: DepositedFile = await deposited_files.reserve_upload_slot(
+        build_new_file(prepared, { status: 'rejected' }),
+      );
+
+      expect(rejected.scanned_at).toEqual(REFERENCE_NOW);
+    });
+
+    it("refuse une piece refusee sans date d'examen", async () => {
+      const prepared = await prepare_deposit_request();
+
+      await expect(
+        deposited_files.reserve_upload_slot(
+          build_new_file(prepared, { status: 'rejected', scanned_at: null }),
+        ),
+      ).rejects.toThrow();
+    });
+
+    // L'autre sens, celui que la contrainte visait depuis le debut : dater ce
+    // que PERSONNE n'a ouvert ferait passer pour examine un objet en attente.
+    it("refuse une piece en attente de scan qui porterait une date d'examen", async () => {
+      const prepared = await prepare_deposit_request();
+
+      await expect(
+        deposited_files.reserve_upload_slot(
+          build_new_file(prepared, { status: 'pending_scan', scanned_at: REFERENCE_NOW }),
+        ),
+      ).rejects.toThrow();
+    });
   });
 });

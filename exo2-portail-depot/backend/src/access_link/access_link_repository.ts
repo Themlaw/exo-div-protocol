@@ -46,11 +46,14 @@ export interface AccessLinkRepository {
     expected_failed_pin_attempts: number;
   }): Promise<boolean>;
 
+  // Rend l'IDENTIFIANT du lien revoque, et non un booleen : le journal
+  // d'activite doit pouvoir nommer ce qui vient d'etre detruit, et un `true` ne
+  // le dit pas.
   revoke_current_link(
     deposit_request_id: string,
     owner_user_id: string,
     now: Date,
-  ): Promise<boolean>;
+  ): Promise<string | null>;
 }
 
 export type AccessLinkRow = typeof access_link.$inferSelect;
@@ -194,9 +197,9 @@ export class DrizzleAccessLinkRepository implements AccessLinkRepository {
     deposit_request_id: string,
     owner_user_id: string,
     now: Date,
-  ): Promise<boolean> {
+  ): Promise<string | null> {
     if (!UUID_SHAPE.test(deposit_request_id)) {
-      return false;
+      return null;
     }
 
     const revoked_rows = await this.database
@@ -218,7 +221,7 @@ export class DrizzleAccessLinkRepository implements AccessLinkRepository {
       )
       .returning({ id: access_link.id });
 
-    return revoked_rows.length === 1;
+    return revoked_rows[0]?.id ?? null;
   }
 }
 

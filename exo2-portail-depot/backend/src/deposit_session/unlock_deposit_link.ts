@@ -11,6 +11,9 @@ import {
 import { open_client_deposit_session } from '../domain/deposit_session';
 import type { AccessLinkTokenHasher } from '../access_link/access_link_token_hasher';
 import type { AccessLinkRepository } from '../access_link/access_link_repository';
+import type { ApplicationLogger } from '../shared/logging/application_logger';
+import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import { build_activity_event, type ActivityEventType } from '../domain/activity_event';
 import {
   fingerprint_deposit_session_token,
   type DepositSessionRepository,
@@ -49,13 +52,17 @@ export interface DepositLinkUnlocker {
 
 export interface DepositLinkUnlockDependencies {
   access_links: AccessLinkRepository;
+  activity_events: ActivityEventRepository;
   deposit_sessions: DepositSessionRepository;
   token_hasher: AccessLinkTokenHasher;
   pin_hasher: PinHasher;
   throttle_store: ClientPinThrottleStore;
   clock: Clock;
   random_source: RandomSource;
+  logger: ApplicationLogger;
 }
+
+export const DEPOSIT_UNLOCK_LOG_CONTEXT = 'deposit_unlock';
 
 export class DepositLinkUnlockService implements DepositLinkUnlocker {
   constructor(private readonly dependencies: DepositLinkUnlockDependencies) {}
@@ -84,6 +91,20 @@ export class DepositLinkUnlockService implements DepositLinkUnlocker {
     // au hasard serait gratuit.
     if (link === null) {
       await this.record_failure(input.client_ip, now);
+
+      // Le seul endroit possible pour cette tentative : un jeton inconnu ne
+      // designe AUCUNE demande, et le journal d'activite s'accroche a une
+      // demande. Elle part donc dans les journaux applicatifs, ou l'exploitation
+      // la lit — et le compteur par adresse, lui, la fait deja peser.
+      //
+      // Sans le jeton, jamais : les journaux sont lus par plus de monde que la
+      // base, et un jeton en clair y serait un lien utilisable.
+      this.dependencies.logger.warn(
+        DEPOSIT_UNLOCK_LOG_CONTEXT,
+        'tentative de deverrouillage sur un jeton inconnu',
+        { client_ip: input.client_ip },
+      );
+
       return { kind: 'refused' };
     }
 
@@ -91,11 +112,19 @@ export class DepositLinkUnlockService implements DepositLinkUnlocker {
     // `GET /public/:token` : le client doit comprendre qu'il lui faut un
     // nouveau lien, pas qu'il a mal recopie son code.
     if (link.status === 'blocked') {
+      // Journalisee A CHAQUE tentative, et non une seule fois : dix essais sur
+      // un lien verrouille sont dix faits distincts, et c'est ce qui explique a
+      // l'avocat pourquoi son client n'a jamais rien depose.
+      await this.journalize(link, 'unusable_access_link_attempted', input.client_ip, now);
       return { kind: 'blocked' };
     }
 
     if (!is_access_link_usable(link, now)) {
       await this.record_failure(input.client_ip, now);
+      // Expire ou revoque : aucun PIN n'a ete verifie, donc pas de
+      // `client_pin_rejected` — ce serait un mensonge. La tentative existe
+      // pourtant, et le lien qu'elle visait est connu.
+      await this.journalize(link, 'unusable_access_link_attempted', input.client_ip, now);
       return { kind: 'refused' };
     }
 
@@ -123,10 +152,44 @@ export class DepositLinkUnlockService implements DepositLinkUnlocker {
 
     if (!outcome.granted) {
       await this.record_failure(input.client_ip, now);
-      return outcome.link_just_became_blocked ? { kind: 'blocked' } : { kind: 'refused' };
+      await this.journalize(link, 'client_pin_rejected', input.client_ip, now);
+
+      // Le BASCULEMENT seulement, jamais l'etat : journaliser a chaque tentative
+      // sur un lien deja bloque ferait autant d'evenements « lien bloque » que
+      // d'essais, et le journal raconterait un blocage qui n'a eu lieu qu'une
+      // fois.
+      if (outcome.link_just_became_blocked) {
+        await this.journalize(link, 'access_link_blocked', input.client_ip, now);
+        return { kind: 'blocked' };
+      }
+
+      return { kind: 'refused' };
     }
 
+    await this.journalize(link, 'deposit_session_opened', input.client_ip, now);
+
     return this.open_session_for(outcome.link_after_attempt, now);
+  }
+
+  // Un token INCONNU n'est journalise nulle part : il ne designe aucune demande,
+  // donc aucun journal ou l'inscrire. C'est le compteur par adresse qui porte la
+  // detection de balayage, pas l'audit d'un dossier.
+  private async journalize(
+    link: AccessLink,
+    type: ActivityEventType,
+    client_ip: string | null,
+    now: Date,
+  ): Promise<void> {
+    await this.dependencies.activity_events.record(
+      build_activity_event({
+        deposit_request_id: link.deposit_request_id,
+        type,
+        actor: { kind: 'client' },
+        access_link_id: link.id,
+        client_ip,
+        occurred_at: now,
+      }),
+    );
   }
 
   private async ip_budget_is_exhausted(client_ip: string | null, now: Date): Promise<boolean> {

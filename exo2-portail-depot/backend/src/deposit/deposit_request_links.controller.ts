@@ -9,8 +9,7 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
-import { read_authenticated_lawyer_session } from '../auth/route_access.guard';
-import type { LawyerSession } from '../auth/lawyer_session_reader';
+import { require_lawyer_session } from '../auth/require_lawyer_session';
 import {
   ACCESS_LINK_ISSUER,
   type AccessLinkDelivery,
@@ -21,6 +20,11 @@ import {
   type AccessLinkRepository,
 } from '../access_link/access_link_repository';
 import { CLOCK, type Clock } from '../shared/clock';
+import {
+  ACTIVITY_EVENT_REPOSITORY,
+  type ActivityEventRepository,
+} from '../activity/activity_event_repository';
+import { build_activity_event } from '../domain/activity_event';
 import {
   DEPOSIT_REQUEST_REPOSITORY,
   type DepositRequestDetail,
@@ -38,6 +42,8 @@ export class DepositRequestLinksController {
     @Inject(DEPOSIT_REQUEST_REPOSITORY)
     private readonly deposit_requests: DepositRequestRepository,
     @Inject(CLOCK) private readonly clock: Clock,
+    @Inject(ACTIVITY_EVENT_REPOSITORY)
+    private readonly activity_events: ActivityEventRepository,
   ) {}
 
   // Regenerer, c'est invalider : l'ancien couple ne rouvre plus rien des cet
@@ -48,7 +54,7 @@ export class DepositRequestLinksController {
     @Req() request: IncomingMessage,
     @Param('deposit_request_id') deposit_request_id: string,
   ): Promise<AccessLinkDelivery> {
-    const owner_user_id: string = read_lawyer_session(request).user_id;
+    const owner_user_id: string = require_lawyer_session(request).user_id;
 
     // La politique est relue sur la DEMANDE a chaque emission : c'est la
     // derniere reglee par l'avocat qui vaut pour le nouveau lien, tandis que
@@ -82,27 +88,31 @@ export class DepositRequestLinksController {
     @Req() request: IncomingMessage,
     @Param('deposit_request_id') deposit_request_id: string,
   ): Promise<void> {
-    const revoked: boolean = await this.access_links.revoke_current_link(
+    const owner_user_id: string = require_lawyer_session(request).user_id;
+    const now: Date = this.clock.now();
+    const revoked_access_link_id: string | null = await this.access_links.revoke_current_link(
       deposit_request_id,
-      read_lawyer_session(request).user_id,
-      this.clock.now(),
+      owner_user_id,
+      now,
     );
 
     // 404 et jamais 403, comme partout ailleurs : « pas a vous » et « il n'y a
     // plus de lien courant » se repondent de la meme facon, sinon l'identifiant
     // d'une demande d'un confrere devient un oracle.
-    if (!revoked) {
+    if (revoked_access_link_id === null) {
       throw new NotFoundException();
     }
-  }
-}
 
-// Le garde a deja refuse la requete si la session manquait : arriver ici sans
-// session serait un garde debranche, pas une requete anonyme.
-function read_lawyer_session(request: IncomingMessage): LawyerSession {
-  const session: LawyerSession | null = read_authenticated_lawyer_session(request);
-  if (session === null) {
-    throw new NotFoundException();
+    // Journalise APRES la revocation : un evenement ecrit avant annoncerait une
+    // destruction qui n'a peut-etre pas eu lieu.
+    await this.activity_events.record(
+      build_activity_event({
+        deposit_request_id,
+        type: 'access_link_revoked',
+        actor: { kind: 'lawyer', user_id: owner_user_id },
+        access_link_id: revoked_access_link_id,
+        occurred_at: now,
+      }),
+    );
   }
-  return session;
 }

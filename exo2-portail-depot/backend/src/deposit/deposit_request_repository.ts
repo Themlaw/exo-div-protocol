@@ -5,6 +5,13 @@ import type { DepositRequestStatus } from '../domain/deposit_request_status';
 import type { DepositRequestCreationInput, ExpectedDocument } from '../domain/expected_document';
 import type { SecurityPolicy } from '../domain/security_policy';
 import type { DepositedFileRepository } from '../deposited_file/deposited_file_repository';
+import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import type { DepositRequestActivitySummary } from '../domain/activity_event';
+import { summarize_deposit_request_activity } from '../domain/activity_event';
+import {
+  build_lawyer_expected_document_views,
+  type LawyerExpectedDocumentView,
+} from './lawyer_deposit_views';
 
 export const DEPOSIT_REQUEST_REPOSITORY: unique symbol = Symbol('DEPOSIT_REQUEST_REPOSITORY');
 
@@ -17,6 +24,10 @@ export interface DepositRequestOverview {
   deposited_document_count: number;
   link_expires_at: Date | null;
   created_at: Date;
+  // Le resume tient dans la liste, et c'est le point : l'avocat doit voir d'un
+  // coup d'oeil LAQUELLE de ses demandes s'est mal passee, sans ouvrir les
+  // douze autres pour s'apercevoir qu'il ne s'y est rien produit.
+  activity_summary: DepositRequestActivitySummary;
 }
 
 export interface DepositRequestDetail {
@@ -25,7 +36,7 @@ export interface DepositRequestDetail {
   status: DepositRequestStatus;
   security_policy: SecurityPolicy;
   created_at: Date;
-  expected_documents: ExpectedDocument[];
+  expected_documents: LawyerExpectedDocumentView[];
 }
 
 // Ce que le CLIENT voit une fois le PIN passe : le titre, pour qu'il sache quel
@@ -52,6 +63,11 @@ export interface DepositRequestRepository {
   // avant de la rejeter est une lecture qui a deja eu lieu, et il suffit d'un
   // futur appelant distrait pour qu'elle sorte.
   list_overviews_for_owner(owner_user_id: string): Promise<DepositRequestOverview[]>;
+
+  // Le predicat seul, sans rapporter la demande : une route qui n'a besoin que
+  // de savoir « est-ce son dossier ? » ne doit pas charger les emplacements et
+  // les pieces pour en jeter le resultat.
+  belongs_to_owner(deposit_request_id: string, owner_user_id: string): Promise<boolean>;
   find_detail_for_owner(
     deposit_request_id: string,
     owner_user_id: string,
@@ -72,6 +88,7 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
   constructor(
     private readonly database: ApplicationDatabase,
     private readonly deposited_files: DepositedFileRepository,
+    private readonly activity_events: ActivityEventRepository,
   ) {}
 
   // Une seule transaction : une demande sans ses documents attendus serait une
@@ -132,6 +149,10 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
       await this.read_current_link_expiries(listed_request_ids);
     const deposited_by_request: Map<string, number> =
       await this.deposited_files.count_occupied_expected_documents(listed_request_ids);
+    // Un seul aller-retour pour toute la liste : un resume par ligne ferait
+    // autant de requetes que de demandes affichees.
+    const activity_by_request: Map<string, DepositRequestActivitySummary> =
+      await this.activity_events.summarize_deposit_requests(listed_request_ids);
 
     return rows.map((row): DepositRequestOverview => ({
       ...row,
@@ -145,7 +166,28 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
       // etre DEJA PASSEE, et c'est voulu — le statut ne dit que ce qu'une
       // decision a pose, l'expiration se lit sur l'horloge.
       link_expires_at: link_expiry_by_request.get(row.id) ?? null,
+      // Absente de la carte veut dire « rien ne s'est mal passe » : le resume
+      // vide est construit ici plutot que rapporte par une ligne de plus.
+      activity_summary: activity_by_request.get(row.id) ?? summarize_deposit_request_activity([]),
     }));
+  }
+
+  async belongs_to_owner(deposit_request_id: string, owner_user_id: string): Promise<boolean> {
+    if (!UUID_SHAPE.test(deposit_request_id)) {
+      return false;
+    }
+
+    const rows = await this.database
+      .select({ id: deposit_request.id })
+      .from(deposit_request)
+      .where(
+        and(
+          eq(deposit_request.id, deposit_request_id),
+          eq(deposit_request.owner_user_id, owner_user_id),
+        ),
+      );
+
+    return rows.length > 0;
   }
 
   async find_detail_for_owner(
@@ -189,14 +231,10 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
         pin_length: found.pin_length,
       },
       created_at: found.created_at,
-      expected_documents: documents.map((document): ExpectedDocument => ({
-        id: document.id,
-        deposit_request_id: document.deposit_request_id,
-        label: document.label,
-        position: document.position,
-        allowed_mime_types: document.allowed_mime_types,
-        max_size_bytes: document.max_size_bytes,
-      })),
+      expected_documents: build_lawyer_expected_document_views(
+        documents,
+        await this.deposited_files.list_for_deposit_request(found.id),
+      ),
     };
   }
 

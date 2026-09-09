@@ -5,6 +5,8 @@ import { generate_access_link_token } from '../domain/presigned_upload';
 import type { PinHasher } from '../domain/verify_client_pin';
 import type { SecurityPolicy } from '../domain/security_policy';
 import type { AccessLinkRepository } from './access_link_repository';
+import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import { build_activity_event } from '../domain/activity_event';
 import type { AccessLinkTokenHasher, AccessLinkTokenFingerprint } from './access_link_token_hasher';
 import { compose_access_link_delivery_message } from './access_link_delivery_message';
 import { generate_client_pin } from './client_pin_generator';
@@ -46,6 +48,7 @@ const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export interface AccessLinkIssuanceDependencies {
   access_links: AccessLinkRepository;
+  activity_events: ActivityEventRepository;
   token_hasher: AccessLinkTokenHasher;
   pin_hasher: PinHasher;
   clock: Clock;
@@ -115,6 +118,20 @@ export class AccessLinkIssuanceService implements AccessLinkIssuer {
     if (issued === null) {
       return null;
     }
+
+    // Une emission INVALIDE le lien precedent : le journal ne porte donc pas de
+    // « lien revoque » ici, un lien emis a telle heure dit deja que celui d'avant
+    // a cesse d'ouvrir a cet instant. Seule la revocation explicite, qui ne
+    // remplace rien, a son propre evenement.
+    await this.dependencies.activity_events.record(
+      build_activity_event({
+        deposit_request_id: input.deposit_request_id,
+        type: 'access_link_issued',
+        actor: { kind: 'lawyer', user_id: input.owner_user_id },
+        access_link_id: issued.id,
+        occurred_at: now,
+      }),
+    );
 
     const url = `${this.dependencies.public_base_url.replace(/\/+$/, '')}${CLIENT_DEPOSIT_PATH}/${token}`;
 

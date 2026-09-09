@@ -11,6 +11,9 @@ import type {
   DepositRequestRepository,
 } from '../deposit/deposit_request_repository';
 import type { DepositedFileRepository } from './deposited_file_repository';
+import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import { build_activity_event } from '../domain/activity_event';
+import type { Clock } from '../shared/clock';
 
 export const CLIENT_FILE_REMOVER: unique symbol = Symbol('CLIENT_FILE_REMOVER');
 
@@ -29,6 +32,8 @@ export interface ClientFileRemovalDependencies {
   deposit_requests: DepositRequestRepository;
   deposited_files: DepositedFileRepository;
   object_storage: ObjectStorage;
+  activity_events: ActivityEventRepository;
+  clock: Clock;
 }
 
 export class ClientFileRemovalService implements ClientFileRemover {
@@ -67,6 +72,20 @@ export class ClientFileRemovalService implements ClientFileRemover {
     // orphelin dans le bucket, invisible, et c'est precisement ce que la
     // reconciliation periodique de l'etape 6 existe pour ramasser.
     await this.dependencies.deposited_files.delete_file(file.id);
+
+    // Journalise AVANT l'objet et APRES la ligne : c'est la disparition de la
+    // ligne qui fait le retrait, et le journal doit porter la trace d'une piece
+    // qu'aucune requete ne retrouvera plus jamais.
+    await this.dependencies.activity_events.record(
+      build_activity_event({
+        deposit_request_id: input.access_link.deposit_request_id,
+        type: 'deposited_file_removed',
+        actor: { kind: 'client' },
+        access_link_id: input.access_link.id,
+        deposited_file_id: file.id,
+        occurred_at: this.dependencies.clock.now(),
+      }),
+    );
 
     if (plan.must_delete_stored_object) {
       await this.delete_stored_object_wherever_it_lives(file.object_key);

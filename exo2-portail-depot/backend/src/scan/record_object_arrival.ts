@@ -9,6 +9,10 @@ import {
 import type { ApplicationLogger } from '../shared/logging/application_logger';
 import type { ObjectArrivalNotification } from './storage_event';
 import type { ScanQueue } from './scan_queue';
+import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import { build_activity_event } from '../domain/activity_event';
+import type { ExpectedDocumentRepository } from '../deposit/expected_document_repository';
+import type { ExpectedDocument } from '../domain/expected_document';
 
 export const OBJECT_ARRIVAL_RECORDER: unique symbol = Symbol('OBJECT_ARRIVAL_RECORDER');
 export const OBJECT_ARRIVAL_LOG_CONTEXT = 'object_arrival';
@@ -24,6 +28,8 @@ export interface ObjectArrivalRecorder {
 
 export interface ObjectArrivalDependencies {
   deposited_files: DepositedFileRepository;
+  expected_documents: ExpectedDocumentRepository;
+  activity_events: ActivityEventRepository;
   object_storage: ObjectStorage;
   scan_queue: ScanQueue;
   clock: Clock;
@@ -83,11 +89,38 @@ export class ObjectArrivalRecordingService implements ObjectArrivalRecorder {
       throw error;
     }
 
+    // C'est l'ARRIVEE qui fait le depot, pas la reservation : une autorisation
+    // d'ecriture que le client n'utilise jamais n'a rien depose, et la
+    // journaliser ferait un journal de pieces inexistantes.
+    await this.journalize_reception(file_after_arrival);
+
     // Enfile APRES l'ecriture : un job qui partirait avant trouverait une piece
     // encore en attente d'upload et conclurait a un objet absent.
     await this.dependencies.scan_queue.enqueue_scan({ deposited_file_id: file.id });
 
     return { kind: 'queued_for_scan' };
+  }
+
+  // La piece ne porte pas sa demande : elle designe un document attendu, qui
+  // seul sait a quel dossier il appartient.
+  private async journalize_reception(file: DepositedFile): Promise<void> {
+    const expected_document: ExpectedDocument | null =
+      await this.dependencies.expected_documents.find_by_id(file.expected_document_id);
+
+    if (expected_document === null) {
+      return;
+    }
+
+    await this.dependencies.activity_events.record(
+      build_activity_event({
+        deposit_request_id: expected_document.deposit_request_id,
+        type: 'deposited_file_received',
+        actor: { kind: 'client' },
+        access_link_id: file.access_link_id,
+        deposited_file_id: file.id,
+        occurred_at: this.dependencies.clock.now(),
+      }),
+    );
   }
 
   // Deux reservations avaient ete delivrees sur le meme emplacement — chacune

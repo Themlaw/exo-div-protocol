@@ -35,6 +35,12 @@ import { CLIENT_PIN_HASHER } from '../access_link/client_pin_hasher';
 import { RANDOM_SOURCE } from '../access_link/access_link_issuer';
 import type { PinHasher } from '../domain/verify_client_pin';
 import type { RandomSource } from '../domain/presigned_upload';
+import {
+  ACTIVITY_EVENT_REPOSITORY,
+  type ActivityEventRepository,
+} from '../activity/activity_event_repository';
+import { APPLICATION_LOGGER } from '../shared/logging/logging.module';
+import type { ApplicationLogger } from '../shared/logging/application_logger';
 import { CLOCK, type Clock } from '../shared/clock';
 import {
   DEPOSIT_SESSION_REPOSITORY,
@@ -73,30 +79,36 @@ import { PublicDepositLinkController } from './public_deposit_link.controller';
       provide: DEPOSIT_LINK_UNLOCKER,
       inject: [
         ACCESS_LINK_REPOSITORY,
+        ACTIVITY_EVENT_REPOSITORY,
         DEPOSIT_SESSION_REPOSITORY,
         ACCESS_LINK_TOKEN_HASHER,
         CLIENT_PIN_HASHER,
         CLIENT_PIN_THROTTLE_STORE,
         CLOCK,
         RANDOM_SOURCE,
+        APPLICATION_LOGGER,
       ],
       useFactory: (
         access_links: AccessLinkRepository,
+        activity_events: ActivityEventRepository,
         deposit_sessions: DepositSessionRepository,
         token_hasher: AccessLinkTokenHasher,
         pin_hasher: PinHasher,
         throttle_store: ClientPinThrottleStore,
         clock: Clock,
         random_source: RandomSource,
+        logger: ApplicationLogger,
       ): DepositLinkUnlocker =>
         new DepositLinkUnlockService({
           access_links,
+          activity_events,
           deposit_sessions,
           token_hasher,
           pin_hasher,
           throttle_store,
           clock,
           random_source,
+          logger,
         }),
     },
     {
@@ -125,13 +137,27 @@ import { PublicDepositLinkController } from './public_deposit_link.controller';
     },
     {
       provide: CLIENT_FILE_REMOVER,
-      inject: [DEPOSIT_REQUEST_REPOSITORY, DEPOSITED_FILE_REPOSITORY, OBJECT_STORAGE],
+      inject: [
+        DEPOSIT_REQUEST_REPOSITORY,
+        DEPOSITED_FILE_REPOSITORY,
+        OBJECT_STORAGE,
+        ACTIVITY_EVENT_REPOSITORY,
+        CLOCK,
+      ],
       useFactory: (
         deposit_requests: DepositRequestRepository,
         deposited_files: DepositedFileRepository,
         object_storage: ObjectStorage,
+        activity_events: ActivityEventRepository,
+        clock: Clock,
       ): ClientFileRemover =>
-        new ClientFileRemovalService({ deposit_requests, deposited_files, object_storage }),
+        new ClientFileRemovalService({
+          deposit_requests,
+          deposited_files,
+          object_storage,
+          activity_events,
+          clock,
+        }),
     },
   ],
   exports: [

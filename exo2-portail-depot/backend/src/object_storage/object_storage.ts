@@ -26,6 +26,25 @@ export interface PresignedUploadTicket {
 // fois `MINIO_NOTIFY_WEBHOOK_*_portail` renseigne.
 export const OBJECT_ARRIVAL_NOTIFICATION_ARN = 'arn:minio:sqs::portail:webhook';
 
+// Ce que le navigateur doit ouvrir, et rien de plus. Les octets ne passent
+// JAMAIS par nous : ils vont du stockage au poste de l'avocat, et l'echeance
+// dit au front dans combien de temps l'URL cesse de valoir quoi que ce soit.
+export interface PresignedDownloadTicket {
+  download_url: string;
+  expires_at: Date;
+}
+
+export interface PresignedDownloadRequest {
+  bucket: string;
+  object_key: string;
+  // Le nom que verra l'avocat. La cle de l'objet ne le porte pas — elle est
+  // construite par nous a partir d'identifiants — donc sans lui le fichier
+  // arriverait nomme comme un UUID.
+  display_filename: string;
+  lifetime_seconds: number;
+  issued_at: Date;
+}
+
 export interface ObjectStorage {
   ensure_buckets_exist(): Promise<void>;
 
@@ -39,6 +58,13 @@ export interface ObjectStorage {
     policy: PresignedUploadPolicy,
     declared_mime_type: string,
   ): Promise<PresignedUploadTicket>;
+
+  // La contrepartie en lecture du presigne d'ecriture, et la raison est la
+  // meme : une piece de deux cents megaoctets relayee par nous occuperait le
+  // process Node pendant tout le transfert. Les en-tetes de protection ne se
+  // posent donc pas sur une reponse — il n'y en a pas — mais entrent dans la
+  // SIGNATURE, ce qui les rend intouchables par le porteur de l'URL.
+  create_presigned_download(request: PresignedDownloadRequest): Promise<PresignedDownloadTicket>;
 
   // Idempotente : supprimer un objet qui n'est pas la n'est pas une erreur.
   // Une piece dont l'upload n'est jamais arrive se retire comme une autre, et

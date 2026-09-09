@@ -7,11 +7,14 @@ import {
   type PostPolicyResult,
 } from 'minio';
 import type { PresignedUploadPolicy } from '../domain/presigned_upload';
+import { build_presigned_download_response_overrides } from '../shared/download_response_headers';
 import {
   OBJECT_ARRIVAL_NOTIFICATION_ARN,
   QUARANTINE_BUCKET_NAME,
   VERIFIED_BUCKET_NAME,
   type ObjectStorage,
+  type PresignedDownloadRequest,
+  type PresignedDownloadTicket,
   type PresignedUploadTicket,
   type StoredObjectDescription,
 } from './object_storage';
@@ -115,6 +118,29 @@ export class MinioObjectStorage implements ObjectStorage {
       upload_url: signed.postURL,
       form_fields: signed.formData,
       expires_at: policy.expires_at,
+    };
+  }
+
+  async create_presigned_download(
+    request: PresignedDownloadRequest,
+  ): Promise<PresignedDownloadTicket> {
+    // Les en-tetes entrent dans la signature : verifie sur le MinIO du projet,
+    // les modifier apres coup rend 403. C'est ce qui empeche le porteur de
+    // l'URL de retourner `attachment` en `inline`, donc de faire ouvrir une
+    // piece deposee DANS une origine de navigateur.
+    const download_url: string = await this.#client.presignedGetObject(
+      request.bucket,
+      request.object_key,
+      request.lifetime_seconds,
+      build_presigned_download_response_overrides(request.display_filename),
+    );
+
+    return {
+      download_url,
+      // Derivee de l'instant fourni par l'appelant, et non de l'horloge du
+      // process : l'echeance annoncee au front doit venir de la meme horloge
+      // que le reste de l'application.
+      expires_at: new Date(request.issued_at.getTime() + request.lifetime_seconds * 1000),
     };
   }
 

@@ -16,7 +16,7 @@ import {
   type LoginThrottleState,
 } from './login_throttling';
 import type { LoginThrottleIdentity, LoginThrottleStore } from './login_throttle_store';
-import type { LoginConcurrencyAdmission, LoginConcurrencyGate } from './login_concurrency_gate';
+import type { Argon2ConcurrencyAdmission, Argon2ConcurrencyGate } from '../shared/argon2_concurrency_gate';
 
 // Le ralentissement annonce peut monter a cinq minutes ; le ralentissement
 // REELLEMENT applique est plafonne bien plus bas. Dormir cinq minutes cote
@@ -182,7 +182,7 @@ export interface LawyerLoginThrottlingDependencies {
   throttle_store: LoginThrottleStore;
   clock: Clock;
   trusted_proxy_hop_count: number;
-  concurrency_gate: LoginConcurrencyGate;
+  concurrency_gate: Argon2ConcurrencyGate;
   logger: ApplicationLogger;
   maximum_request_body_bytes: number;
 }
@@ -267,7 +267,7 @@ export function build_lawyer_login_throttler(
 
     // La place est prise APRES l'attente : une requete qu'on fait patienter ne
     // doit pas occuper un fil qu'elle n'utilise pas encore.
-    const admission: LoginConcurrencyAdmission = await dependencies.concurrency_gate.enter();
+    const admission: Argon2ConcurrencyAdmission = await dependencies.concurrency_gate.enter();
     if (admission.kind === 'queue_full') {
       dependencies.logger.warn(
         LAWYER_AUTH_LOG_CONTEXT,

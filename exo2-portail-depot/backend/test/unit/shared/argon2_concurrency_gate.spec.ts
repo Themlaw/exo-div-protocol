@@ -1,8 +1,8 @@
 import {
-  build_login_concurrency_gate,
-  type LoginConcurrencyAdmission,
-  type LoginConcurrencyGate,
-} from '../../../src/auth/login_concurrency_gate';
+  build_argon2_concurrency_gate,
+  type Argon2ConcurrencyAdmission,
+  type Argon2ConcurrencyGate,
+} from '../../../src/shared/argon2_concurrency_gate';
 
 const SMALL_BOUNDS = {
   maximum_concurrent_evaluations: 2,
@@ -10,18 +10,18 @@ const SMALL_BOUNDS = {
 } as const;
 
 async function settled_kind_or_pending(
-  admission: Promise<LoginConcurrencyAdmission>,
-): Promise<LoginConcurrencyAdmission['kind'] | 'pending'> {
+  admission: Promise<Argon2ConcurrencyAdmission>,
+): Promise<Argon2ConcurrencyAdmission['kind'] | 'pending'> {
   return Promise.race([
-    admission.then((settled: LoginConcurrencyAdmission) => settled.kind),
+    admission.then((settled: Argon2ConcurrencyAdmission) => settled.kind),
     // Une micro-tache suffit : une admission immediate se resout avant, une
     // admission en attente non.
     Promise.resolve().then((): 'pending' => 'pending'),
   ]);
 }
 
-async function admit_or_throw(gate: LoginConcurrencyGate): Promise<() => void> {
-  const admission: LoginConcurrencyAdmission = await gate.enter();
+async function admit_or_throw(gate: Argon2ConcurrencyGate): Promise<() => void> {
+  const admission: Argon2ConcurrencyAdmission = await gate.enter();
   if (admission.kind !== 'admitted') {
     throw new Error(`admission attendue, recu ${admission.kind}`);
   }
@@ -29,10 +29,10 @@ async function admit_or_throw(gate: LoginConcurrencyGate): Promise<() => void> {
 }
 
 describe('le plafond de concurrence de la connexion', () => {
-  let gate: LoginConcurrencyGate;
+  let gate: Argon2ConcurrencyGate;
 
   beforeEach(() => {
-    gate = build_login_concurrency_gate(SMALL_BOUNDS);
+    gate = build_argon2_concurrency_gate(SMALL_BOUNDS);
   });
 
   it('admet immediatement tant que le plafond n est pas atteint', async () => {
@@ -70,13 +70,13 @@ describe('le plafond de concurrence de la connexion', () => {
     const first_release: () => void = await admit_or_throw(gate);
     await admit_or_throw(gate);
 
-    const queued: Promise<LoginConcurrencyAdmission>[] = [
+    const queued: Promise<Argon2ConcurrencyAdmission>[] = [
       gate.enter(),
       gate.enter(),
       gate.enter(),
     ];
 
-    await expect(gate.enter()).resolves.toEqual<LoginConcurrencyAdmission>({
+    await expect(gate.enter()).resolves.toEqual<Argon2ConcurrencyAdmission>({
       kind: 'queue_full',
     });
 
@@ -109,9 +109,9 @@ describe('le plafond de concurrence de la connexion', () => {
     void gate.enter();
     void gate.enter();
 
-    const refused: LoginConcurrencyAdmission = await gate.enter();
+    const refused: Argon2ConcurrencyAdmission = await gate.enter();
 
-    expect(refused).toEqual<LoginConcurrencyAdmission>({ kind: 'queue_full' });
+    expect(refused).toEqual<Argon2ConcurrencyAdmission>({ kind: 'queue_full' });
     expect(Object.keys(refused)).toEqual(['kind']);
   });
 });

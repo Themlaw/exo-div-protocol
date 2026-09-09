@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { ApplicationDatabase } from '../db/database_connection';
-import { deposit_request, expected_document } from '../db/schema/deposit_schema';
+import { access_link, deposit_request, expected_document } from '../db/schema/deposit_schema';
 import type { DepositRequestStatus } from '../domain/deposit_request_status';
 import type { DepositRequestCreationInput, ExpectedDocument } from '../domain/expected_document';
 import type { SecurityPolicy } from '../domain/security_policy';
@@ -104,19 +104,23 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
       // d'un chargement a l'autre.
       .orderBy(desc(deposit_request.created_at));
 
-    const documents_by_request: Map<string, number> = await this.count_expected_documents(
-      rows.map((row): string => row.id),
-    );
+    const listed_request_ids: string[] = rows.map((row): string => row.id);
+    const documents_by_request: Map<string, number> =
+      await this.count_expected_documents(listed_request_ids);
+    const link_expiry_by_request: Map<string, Date> =
+      await this.read_current_link_expiries(listed_request_ids);
 
     return rows.map((row): DepositRequestOverview => ({
       ...row,
       expected_document_count: documents_by_request.get(row.id) ?? 0,
-      // Ces deux chiffres valent bien zero et null AUJOURD'HUI, et non par
-      // defaut : aucune piece ne peut avoir ete deposee ni aucun lien emis,
-      // les tables n'existent pas encore. A brancher aux etapes 3 et 5, ou ils
-      // deviendront de vraies lectures.
+      // Zero AUJOURD'HUI, et non par defaut : aucune piece ne peut avoir ete
+      // deposee, la table n'existe pas encore. A brancher a l'etape 5.
       deposited_document_count: 0,
-      link_expires_at: null,
+      // `null` veut dire « aucun lien courant » : soit l'avocat n'en a jamais
+      // emis, soit le dernier a ete revoque ou bloque. L'echeance rendue peut
+      // etre DEJA PASSEE, et c'est voulu — le statut ne dit que ce qu'une
+      // decision a pose, l'expiration se lit sur l'horloge.
+      link_expires_at: link_expiry_by_request.get(row.id) ?? null,
     }));
   }
 
@@ -170,6 +174,34 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
         max_size_bytes: document.max_size_bytes,
       })),
     };
+  }
+
+  // Une seule requete pour toute la liste, comme pour les documents : un appel
+  // par demande ferait autant d'allers-retours que de lignes affichees.
+  //
+  // L'index unique partiel garantit qu'il n'existe au plus qu'un lien actif par
+  // demande : la Map ne peut donc pas ecraser une echeance par une autre.
+  private async read_current_link_expiries(
+    deposit_request_ids: readonly string[],
+  ): Promise<Map<string, Date>> {
+    if (deposit_request_ids.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.database
+      .select({
+        deposit_request_id: access_link.deposit_request_id,
+        expires_at: access_link.expires_at,
+      })
+      .from(access_link)
+      .where(
+        and(
+          inArray(access_link.deposit_request_id, [...deposit_request_ids]),
+          eq(access_link.status, 'active'),
+        ),
+      );
+
+    return new Map(rows.map((row): [string, Date] => [row.deposit_request_id, row.expires_at]));
   }
 
   // Un seul GROUP BY pour toute la liste, et non un COUNT par demande : la page

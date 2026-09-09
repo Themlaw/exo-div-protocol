@@ -206,6 +206,37 @@ describe('Remise du lien et du PIN', () => {
       .expect(401);
   });
 
+  it("« Mes demandes » annonce l'echeance du lien courant, et plus rien apres revocation", async () => {
+    const created = await create_request_with_link();
+
+    const listed_with_link = await request(app.getHttpServer())
+      .get(DEPOSIT_REQUESTS_PATH)
+      .set('Cookie', lawyer_cookie)
+      .expect(200);
+    const overview_with_link = (listed_with_link.body as { id: string; link_expires_at: string | null }[]).find(
+      (overview) => overview.id === created.id,
+    );
+
+    expect(overview_with_link?.link_expires_at).toBe(created.access_link.expires_at);
+
+    await request(app.getHttpServer())
+      .delete(`${DEPOSIT_REQUESTS_PATH}/${created.id}/links/current`)
+      .set('Cookie', lawyer_cookie)
+      .expect(204);
+
+    const listed_after_revocation = await request(app.getHttpServer())
+      .get(DEPOSIT_REQUESTS_PATH)
+      .set('Cookie', lawyer_cookie)
+      .expect(200);
+    const overview_after_revocation = (
+      listed_after_revocation.body as { id: string; link_expires_at: string | null }[]
+    ).find((overview) => overview.id === created.id);
+
+    // `null` et non l'echeance du lien mort : un lien revoque n'a plus
+    // d'echeance a annoncer, il a une regeneration a demander.
+    expect(overview_after_revocation?.link_expires_at).toBeNull();
+  });
+
   // [61][62] Les journaux sont lus par plus de monde que la base, et gardes
   // plus longtemps : un PIN qui y passe une fois y reste.
   it('ni le token ni le PIN n apparaissent dans les journaux', async () => {

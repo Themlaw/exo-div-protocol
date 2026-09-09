@@ -10,6 +10,7 @@ import {
 import type { RouteAccessKind } from '../../../src/auth/route_access';
 import { ENVIRONMENT_VARIABLE_NAMES } from '../../../src/config/environment';
 import {
+  API_ROUTE_PREFIX,
   DEPOSIT_REQUESTS_PATH,
   LAWYER_AUTH_ROUTE_PATHS,
   HEALTH_PATH,
@@ -49,6 +50,12 @@ const NON_LAWYER_ROUTE_WHITELIST: ReadonlyArray<
   (declaration) =>
     declaration.http_method === 'GET' &&
     declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token/documents`,
+  (declaration) =>
+    declaration.http_method === 'POST' &&
+    declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token/uploads`,
+  (declaration) =>
+    declaration.http_method === 'DELETE' &&
+    declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token/files/:deposited_file_id`,
   // [F6] La surface d'authentification, declaree a la main parce qu'elle
   // echappe au routeur Nest. Trois chemins EXACTS et rien de plus : la
   // bibliotheque en expose une trentaine sous le meme prefixe, et le montage
@@ -108,6 +115,24 @@ describe('Protection des routes par defaut', () => {
 
     expect(response.status).not.toBe(403);
     expect(response.status).toBe(401);
+  });
+
+  // Le masquage des chemins non routes : sans lui, la difference 404/401
+  // dessinerait a un anonyme la carte de ce qui existe.
+  it("[1] un chemin qu'aucun controleur ne sert repond 401 comme une route protegee", async () => {
+    const response = await request(app.getHttpServer()).get(`${API_ROUTE_PREFIX}/rien-de-tel`);
+
+    expect(response.status).toBe(401);
+  });
+
+  it("[2] le meme chemin inconnu rend un vrai 404 a un avocat connecte : il n'apprend rien qu'il ne puisse deduire", async () => {
+    const session_cookie = await authenticate_as_demo_lawyer(app);
+
+    const response = await request(app.getHttpServer())
+      .get(`${API_ROUTE_PREFIX}/rien-de-tel`)
+      .set('Cookie', session_cookie);
+
+    expect(response.status).toBe(404);
   });
 
   it('[2] la meme route avec une session valide repond autre chose que 401', async () => {

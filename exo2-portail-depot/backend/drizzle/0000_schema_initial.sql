@@ -130,8 +130,10 @@ CREATE TABLE "deposit"."deposit_session" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"access_link_id" uuid NOT NULL,
 	"token_sha256" text NOT NULL,
+	"issued_upload_count" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"expires_at" timestamp with time zone NOT NULL,
+	CONSTRAINT "deposit_session_issued_upload_count_is_not_negative" CHECK ("deposit"."deposit_session"."issued_upload_count" >= 0),
 	CONSTRAINT "deposit_session_expires_after_creation" CHECK ("deposit"."deposit_session"."expires_at" > "deposit"."deposit_session"."created_at")
 );
 --> statement-breakpoint

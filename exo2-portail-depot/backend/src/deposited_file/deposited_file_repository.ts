@@ -41,6 +41,13 @@ export interface DepositedFileRepository {
 
   list_for_deposit_request(deposit_request_id: string): Promise<DepositedFile[]>;
 
+  // La piece qui OCCUPE l'emplacement, s'il y en a une. L'index unique partiel
+  // ne peut pas tenir ce role a lui seul : une nouvelle reservation entre en
+  // `pending_upload`, statut non occupant, donc elle n'entre pas dans l'index et
+  // ne collisionne avec rien. L'index reste le garde de course au moment ou la
+  // piece DEVIENT occupante ; le refus, lui, se lit ici.
+  find_occupant_of_expected_document(expected_document_id: string): Promise<DepositedFile | null>;
+
   count_occupied_expected_documents(
     deposit_request_ids: readonly string[],
   ): Promise<Map<string, number>>;
@@ -71,6 +78,23 @@ export class DrizzleDepositedFileRepository implements DepositedFileRepository {
         and(
           eq(deposited_file.id, deposited_file_id),
           eq(deposited_file.access_link_id, access_link_id),
+        ),
+      );
+
+    const found = rows[0];
+    return found === undefined ? null : to_domain_deposited_file(found);
+  }
+
+  async find_occupant_of_expected_document(
+    expected_document_id: string,
+  ): Promise<DepositedFile | null> {
+    const rows = await this.database
+      .select()
+      .from(deposited_file)
+      .where(
+        and(
+          eq(deposited_file.expected_document_id, expected_document_id),
+          inArray(deposited_file.status, [...OCCUPYING_STATUSES]),
         ),
       );
 

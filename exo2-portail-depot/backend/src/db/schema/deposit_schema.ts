@@ -215,6 +215,12 @@ export const deposit_session = deposit_schema.table(
     // depot sans connaitre le PIN. SHA-256 suffit, sans argon2 : le jeton porte
     // 190 bits d'alea, il n'y a rien a casser hors ligne.
     token_sha256: text('token_sha256').notNull(),
+    // Le quota d'autorisations d'ecriture delivrees, porte par la session
+    // plutot que deduit d'un comptage de pieces : une piece supprimee puis
+    // redeposee rendrait le compteur decroissant, et il suffirait de supprimer
+    // pour se refaire un budget. Incremente sous garde par Postgres, donc
+    // insensible a deux demandes simultanees.
+    issued_upload_count: integer('issued_upload_count').notNull().default(0),
     created_at: timestamp('created_at', { withTimezone: true, mode: 'date' })
       .notNull()
       .defaultNow(),
@@ -222,6 +228,10 @@ export const deposit_session = deposit_schema.table(
   },
   (table) => [
     uniqueIndex('deposit_session_token_sha256_key').on(table.token_sha256),
+    check(
+      'deposit_session_issued_upload_count_is_not_negative',
+      sql`${table.issued_upload_count} >= 0`,
+    ),
     // Postgres n'indexe jamais le cote referencant d'une clef etrangere, et la
     // cascade depuis un lien supprime balaierait sinon la table entiere.
     index('deposit_session_access_link_id_idx').on(table.access_link_id),

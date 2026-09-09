@@ -69,6 +69,7 @@ function build_unlock_harness(options: {
       return { id: 'session-1', ...input.session };
     },
     find_by_token_fingerprint: async (): Promise<OpenedDepositSession | null> => null,
+    consume_upload_allowance: async (): Promise<boolean> => true,
   };
 
   const throttle_store: ClientPinThrottleStore = {

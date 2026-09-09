@@ -14,6 +14,56 @@ import {
 import { ENVIRONMENT_VARIABLE_NAMES } from '../../../src/config/environment';
 import { DEFAULT_SECURITY_POLICY } from '../../../src/domain/security_policy';
 import { CLIENT_DEPOSIT_SESSION_LIFETIME_SECONDS } from '../../../src/deposit_session/unlock_deposit_link';
+import { MAXIMUM_UPLOADS_PER_DEPOSIT_SESSION } from '../../../src/deposited_file/authorize_client_upload';
+import { APPLICATION_DATABASE } from '../../../src/db/database.module';
+import type { ApplicationDatabase } from '../../../src/db/database_connection';
+import { sql } from 'drizzle-orm';
+import { Client as MinioClient } from 'minio';
+import { parse_minio_connection_settings } from '../../../src/object_storage/minio_object_storage';
+import { QUARANTINE_BUCKET_NAME } from '../../../src/object_storage/object_storage';
+
+// Interroge MinIO directement : verifier la suppression par nos propres
+// repositories reviendrait a se croire sur parole. Le bucket est prive, donc
+// une requete HTTP anonyme repondrait 403 sans rien prouver.
+async function object_key_exists(object_key: string): Promise<boolean> {
+  const client = new MinioClient(
+    parse_minio_connection_settings({
+      endpoint_url: process.env[ENVIRONMENT_VARIABLE_NAMES.minio_endpoint] as string,
+      access_key: process.env[ENVIRONMENT_VARIABLE_NAMES.minio_root_user] as string,
+      secret_key: process.env[ENVIRONMENT_VARIABLE_NAMES.minio_root_password] as string,
+    }),
+  );
+
+  try {
+    await client.statObject(QUARANTINE_BUCKET_NAME, object_key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Volontairement minuscule : ces tests postent reellement dans MinIO, et un
+// plafond a vingt megaoctets ferait transiter vingt megaoctets par assertion.
+const MAXIMUM_DOCUMENT_SIZE_BYTES = 4096;
+
+// Poste vers MinIO exactement comme le fera le navigateur : les champs signes
+// d'abord, le contenu en dernier — la specification du POST S3 l'impose.
+async function post_to_minio(
+  ticket: { upload_url: string; form_fields: Record<string, string> },
+  content_length: number,
+): Promise<number> {
+  const form = new FormData();
+  for (const [field_name, field_value] of Object.entries(ticket.form_fields)) {
+    form.append(field_name, field_value);
+  }
+  form.append(
+    'file',
+    new Blob([new Uint8Array(Buffer.alloc(content_length, 7))], { type: 'application/pdf' }),
+  );
+
+  const response = await fetch(ticket.upload_url, { method: 'POST', body: form });
+  return response.status;
+}
 
 interface IssuedLink {
   deposit_request_id: string;
@@ -21,10 +71,23 @@ interface IssuedLink {
   pin: string;
 }
 
+interface ClientUploadTicketBody {
+  deposited_file_id: string;
+  upload_url: string;
+  form_fields: Record<string, string>;
+  expires_at: string;
+}
+
 interface ClientDepositBoardBody {
   title: string;
   session_expires_at: string;
-  expected_documents: readonly { id: string; label: string; position: number }[];
+  deposit_request_status: string;
+  expected_documents: readonly {
+    id: string;
+    label: string;
+    position: number;
+    deposited_file: { id: string; display_filename: string; status: string } | null;
+  }[];
 }
 
 // Le lien remis est une URL de FRONT : le jeton que l'API attend en est le
@@ -38,6 +101,7 @@ describe('Deverrouillage public du lien de depot', () => {
   let integration_test_application: IntegrationTestApplication | undefined;
   let app: INestApplication;
   let lawyer_cookie: string;
+  let database: ApplicationDatabase;
 
   async function issue_link(pin_length: number = DEFAULT_SECURITY_POLICY.pin_length): Promise<IssuedLink> {
     const response = await request(app.getHttpServer())
@@ -51,7 +115,7 @@ describe('Deverrouillage public du lien de depot', () => {
             label: 'Acte de deces',
             position: 0,
             allowed_mime_types: ['application/pdf'],
-            max_size_bytes: 5 * 1024 * 1024,
+            max_size_bytes: MAXIMUM_DOCUMENT_SIZE_BYTES,
           },
         ],
       })
@@ -84,14 +148,62 @@ describe('Deverrouillage public du lien de depot', () => {
     return session_cookie.split(';')[0];
   }
 
+  function request_upload(
+    token: string,
+    session_cookie: string,
+    body: Record<string, unknown>,
+  ): request.Test {
+    return request(app.getHttpServer())
+      .post(`${PUBLIC_DEPOSIT_PATH}/${token}/uploads`)
+      .set('Cookie', session_cookie)
+      .send(body);
+  }
+
+  async function read_first_expected_document_id(
+    token: string,
+    session_cookie: string,
+  ): Promise<string> {
+    const response = await read_documents(token, session_cookie).expect(200);
+    return (response.body as ClientDepositBoardBody).expected_documents[0].id;
+  }
+
   function read_documents(token: string, session_cookie?: string): request.Test {
     const pending = request(app.getHttpServer()).get(`${PUBLIC_DEPOSIT_PATH}/${token}/documents`);
     return session_cookie === undefined ? pending : pending.set('Cookie', session_cookie);
   }
 
+  // Ce que fera la notification `s3:ObjectCreated` a l'etape 6 : l'objet est
+  // arrive, la piece occupe desormais l'emplacement. Ecrit ici a la main parce
+  // que le webhook n'existe pas encore — sans quoi la regle « un document, une
+  // piece » ne serait observable de bout en bout qu'a l'etape suivante.
+  async function occupy_slot(ticket: ClientUploadTicketBody): Promise<void> {
+    await post_to_minio(ticket, 1024);
+    await database.execute(
+      sql`UPDATE deposit.deposited_file
+          SET status = 'pending_scan', uploaded_at = now()
+          WHERE id = ${ticket.deposited_file_id}::uuid`,
+    );
+  }
+
+  async function read_deposited_count_as_lawyer(deposit_request_id: string): Promise<number> {
+    const response = await request(app.getHttpServer())
+      .get(DEPOSIT_REQUESTS_PATH)
+      .set('Cookie', lawyer_cookie)
+      .expect(200);
+
+    const overviews = response.body as readonly {
+      id: string;
+      deposited_document_count: number;
+    }[];
+
+    return overviews.find((overview) => overview.id === deposit_request_id)!
+      .deposited_document_count;
+  }
+
   beforeAll(async () => {
     integration_test_application = await create_integration_test_application();
     app = integration_test_application.app;
+    database = app.get<ApplicationDatabase>(APPLICATION_DATABASE);
 
     const sign_in_response = await request(app.getHttpServer())
       .post(LAWYER_AUTH_ROUTE_PATHS.sign_in)
@@ -257,5 +369,296 @@ describe('Deverrouillage public du lien de depot', () => {
       .expect(204);
 
     await read_documents(link.token, session_cookie).expect(401);
+  });
+
+  it('delivre une autorisation d ecriture que le navigateur peut poster a MinIO', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+
+    const response = await request_upload(link.token, session_cookie, {
+      expected_document_id,
+      filename: 'contrat signe.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    }).expect(201);
+
+    const ticket = response.body as ClientUploadTicketBody;
+    expect(ticket.upload_url).toContain('http');
+    expect(ticket.form_fields.key).toContain(expected_document_id);
+    expect(new Date(ticket.expires_at).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  // Les octets ne passent pas par l'API : le ticket doit reellement fonctionner
+  // contre MinIO, sinon on ne teste que notre propre mise en forme.
+  it('le ticket delivre accepte vraiment un fichier, et refuse ce qui depasse le plafond', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+
+    const response = await request_upload(link.token, session_cookie, {
+      expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    }).expect(201);
+    const ticket = response.body as ClientUploadTicketBody;
+
+    await expect(post_to_minio(ticket, 1024)).resolves.toBe(204);
+    await expect(post_to_minio(ticket, MAXIMUM_DOCUMENT_SIZE_BYTES + 1)).resolves.toBeGreaterThan(
+      399,
+    );
+  });
+
+  it('un emplacement qui n appartient pas a la demande du lien reste introuvable', async () => {
+    const link = await issue_link();
+    const other_link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const other_session_cookie = await unlock_and_keep_cookie(other_link);
+    const other_expected_document_id = await read_first_expected_document_id(
+      other_link.token,
+      other_session_cookie,
+    );
+
+    await request_upload(link.token, session_cookie, {
+      expected_document_id: other_expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    }).expect(404);
+  });
+
+  it('un type annonce hors liste blanche est refuse avant tout envoi', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+
+    const refused = await request_upload(link.token, session_cookie, {
+      expected_document_id,
+      filename: 'programme.exe',
+      mime_type: 'application/x-msdownload',
+      size_bytes: 1024,
+    }).expect(422);
+
+    expect(refused.body.reason).toBe('mime_type_not_allowed');
+  });
+
+  it('une taille annoncee au-dessus du plafond est refusee avant tout envoi', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+
+    const refused = await request_upload(link.token, session_cookie, {
+      expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: MAXIMUM_DOCUMENT_SIZE_BYTES + 1,
+    }).expect(422);
+
+    expect(refused.body.reason).toBe('declared_size_above_limit');
+  });
+
+  it('un corps sans les champs attendus est refuse en 400 : derriere la session, on peut le dire', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+
+    await request_upload(link.token, session_cookie, { filename: 'contrat.pdf' }).expect(400);
+  });
+
+  it('sans session, aucune autorisation d ecriture n est delivree', async () => {
+    const link = await issue_link();
+
+    await request(app.getHttpServer())
+      .post(`${PUBLIC_DEPOSIT_PATH}/${link.token}/uploads`)
+      .send({
+        expected_document_id: '11111111-2222-3333-4444-555555555555',
+        filename: 'contrat.pdf',
+        mime_type: 'application/pdf',
+        size_bytes: 1024,
+      })
+      .expect(401);
+  });
+
+  // UN document attendu, UNE piece : le second envoi est refuse tant que le
+  // premier n'a pas ete retire. La popup de confirmation vit dans le front, la
+  // regle vit ici.
+  it('un emplacement occupe refuse une seconde autorisation', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+    const upload_body = {
+      expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    };
+
+    const first = await request_upload(link.token, session_cookie, upload_body).expect(201);
+    await occupy_slot(first.body as ClientUploadTicketBody);
+
+    await request_upload(link.token, session_cookie, upload_body).expect(409);
+  });
+
+  it('le quota d autorisations par session finit par se fermer', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+    const upload_body = {
+      expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    };
+
+    for (let issued = 0; issued < MAXIMUM_UPLOADS_PER_DEPOSIT_SESSION; issued += 1) {
+      await request_upload(link.token, session_cookie, upload_body).expect(201);
+    }
+
+    await request_upload(link.token, session_cookie, upload_body).expect(429);
+  });
+
+  it('la piece qui occupe un emplacement apparait dans le tableau du client', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+
+    const authorized = await request_upload(link.token, session_cookie, {
+      expected_document_id,
+      filename: '../../etc/passwd',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    }).expect(201);
+    await occupy_slot(authorized.body as ClientUploadTicketBody);
+
+    const board = (await read_documents(link.token, session_cookie).expect(200))
+      .body as ClientDepositBoardBody;
+
+    const deposited = board.expected_documents[0].deposited_file;
+    expect(deposited?.status).toBe('pending_scan');
+    // Le nom vient d'un tiers non authentifie : il ressort nettoye, jamais brut.
+    expect(deposited?.display_filename).toBe('passwd');
+  });
+
+  // Une reservation dont l'objet n'est jamais arrive ne doit pas s'afficher
+  // comme un depot reussi : le client croirait avoir depose.
+  it('une reservation sans envoi n apparait pas comme une piece deposee', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+
+    await request_upload(link.token, session_cookie, {
+      expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    }).expect(201);
+
+    const board = (await read_documents(link.token, session_cookie).expect(200))
+      .body as ClientDepositBoardBody;
+
+    expect(board.expected_documents[0].deposited_file).toBeNull();
+  });
+
+  it('le retrait libere l emplacement et permet un nouvel envoi', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+    const upload_body = {
+      expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    };
+
+    const authorized = await request_upload(link.token, session_cookie, upload_body).expect(201);
+    const ticket = authorized.body as ClientUploadTicketBody;
+    await occupy_slot(ticket);
+    await request_upload(link.token, session_cookie, upload_body).expect(409);
+
+    await request(app.getHttpServer())
+      .delete(`${PUBLIC_DEPOSIT_PATH}/${link.token}/files/${ticket.deposited_file_id}`)
+      .set('Cookie', session_cookie)
+      .expect(204);
+
+    await request_upload(link.token, session_cookie, upload_body).expect(201);
+  });
+
+  // L'objet doit reellement quitter le bucket : la ligne en base ne suffit pas,
+  // sinon un fichier retire resterait telechargeable par qui connait sa cle.
+  it('le retrait fait disparaitre l objet du bucket, pas seulement la ligne', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+
+    const authorized = await request_upload(link.token, session_cookie, {
+      expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    }).expect(201);
+    const ticket = authorized.body as ClientUploadTicketBody;
+    await occupy_slot(ticket);
+
+    await request(app.getHttpServer())
+      .delete(`${PUBLIC_DEPOSIT_PATH}/${link.token}/files/${ticket.deposited_file_id}`)
+      .set('Cookie', session_cookie)
+      .expect(204);
+
+    await expect(object_key_exists(ticket.form_fields.key)).resolves.toBe(false);
+  });
+
+  it('une piece d un autre lien reste introuvable au retrait', async () => {
+    const link = await issue_link();
+    const other_link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const other_session_cookie = await unlock_and_keep_cookie(other_link);
+    const other_expected_document_id = await read_first_expected_document_id(
+      other_link.token,
+      other_session_cookie,
+    );
+
+    const authorized = await request_upload(other_link.token, other_session_cookie, {
+      expected_document_id: other_expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    }).expect(201);
+
+    await request(app.getHttpServer())
+      .delete(
+        `${PUBLIC_DEPOSIT_PATH}/${link.token}/files/${(authorized.body as ClientUploadTicketBody).deposited_file_id}`,
+      )
+      .set('Cookie', session_cookie)
+      .expect(404);
+  });
+
+  it('sans session, aucun retrait n est possible', async () => {
+    const link = await issue_link();
+
+    await request(app.getHttpServer())
+      .delete(`${PUBLIC_DEPOSIT_PATH}/${link.token}/files/11111111-2222-3333-4444-555555555555`)
+      .expect(401);
+  });
+
+  // L'autre bout du parcours : ce que le client depose doit apparaitre au
+  // tableau de bord de l'avocat, et n'y apparaitre qu'une fois reellement
+  // arrive. C'est le compteur « 2 pieces sur 4 » de la liste des demandes.
+  it('une piece deposee remonte au compteur de l avocat, une reservation seule non', async () => {
+    const link = await issue_link();
+    const session_cookie = await unlock_and_keep_cookie(link);
+    const expected_document_id = await read_first_expected_document_id(link.token, session_cookie);
+
+    const authorized = await request_upload(link.token, session_cookie, {
+      expected_document_id,
+      filename: 'contrat.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: 1024,
+    }).expect(201);
+
+    expect(await read_deposited_count_as_lawyer(link.deposit_request_id)).toBe(0);
+
+    await occupy_slot(authorized.body as ClientUploadTicketBody);
+
+    expect(await read_deposited_count_as_lawyer(link.deposit_request_id)).toBe(1);
   });
 });

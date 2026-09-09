@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, lt, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 import type { ApplicationDatabase } from '../db/database_connection';
 import { access_link, deposit_session } from '../db/schema/deposit_schema';
@@ -29,10 +29,34 @@ export interface DepositSessionRepository {
   open_session(input: { session: NewDepositSession; token_sha256: string }): Promise<DepositSession>;
 
   find_by_token_fingerprint(token_sha256: string): Promise<OpenedDepositSession | null>;
+
+  // Incremente et rend `false` si le plafond est deja atteint, EN UNE SEULE
+  // ecriture gardee : lire puis ecrire laisserait deux demandes simultanees
+  // franchir ensemble le dernier cran. Rend `false` aussi pour une session
+  // inconnue, ce qui est le bon refus.
+  consume_upload_allowance(deposit_session_id: string, maximum_allowed: number): Promise<boolean>;
 }
 
 export class DrizzleDepositSessionRepository implements DepositSessionRepository {
   constructor(private readonly database: ApplicationDatabase) {}
+
+  async consume_upload_allowance(
+    deposit_session_id: string,
+    maximum_allowed: number,
+  ): Promise<boolean> {
+    const updated_rows = await this.database
+      .update(deposit_session)
+      .set({ issued_upload_count: sql`${deposit_session.issued_upload_count} + 1` })
+      .where(
+        and(
+          eq(deposit_session.id, deposit_session_id),
+          lt(deposit_session.issued_upload_count, maximum_allowed),
+        ),
+      )
+      .returning({ id: deposit_session.id });
+
+    return updated_rows.length > 0;
+  }
 
   async open_session(input: {
     session: NewDepositSession;

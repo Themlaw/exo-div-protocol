@@ -3,6 +3,26 @@ import { APPLICATION_DATABASE } from '../db/database.module';
 import type { ApplicationDatabase } from '../db/database_connection';
 import { AccessLinkModule } from '../access_link/access_link.module';
 import { DepositModule } from '../deposit/deposit.module';
+import { DepositedFileModule } from '../deposited_file/deposited_file.module';
+import {
+  DEPOSITED_FILE_REPOSITORY,
+  type DepositedFileRepository,
+} from '../deposited_file/deposited_file_repository';
+import {
+  CLIENT_FILE_REMOVER,
+  ClientFileRemovalService,
+  type ClientFileRemover,
+} from '../deposited_file/remove_client_file';
+import {
+  CLIENT_UPLOAD_AUTHORIZER,
+  ClientUploadAuthorizationService,
+  type ClientUploadAuthorizer,
+} from '../deposited_file/authorize_client_upload';
+import { OBJECT_STORAGE, type ObjectStorage } from '../object_storage/object_storage';
+import {
+  DEPOSIT_REQUEST_REPOSITORY,
+  type DepositRequestRepository,
+} from '../deposit/deposit_request_repository';
 import {
   ACCESS_LINK_REPOSITORY,
   type AccessLinkRepository,
@@ -34,7 +54,7 @@ import {
 import { PublicDepositLinkController } from './public_deposit_link.controller';
 
 @Module({
-  imports: [AccessLinkModule, DepositModule],
+  imports: [AccessLinkModule, DepositModule, DepositedFileModule],
   controllers: [PublicDepositLinkController],
   providers: [
     {
@@ -79,7 +99,47 @@ import { PublicDepositLinkController } from './public_deposit_link.controller';
           random_source,
         }),
     },
+    {
+      provide: CLIENT_UPLOAD_AUTHORIZER,
+      inject: [
+        DEPOSIT_REQUEST_REPOSITORY,
+        DEPOSITED_FILE_REPOSITORY,
+        DEPOSIT_SESSION_REPOSITORY,
+        OBJECT_STORAGE,
+        CLOCK,
+      ],
+      useFactory: (
+        deposit_requests: DepositRequestRepository,
+        deposited_files: DepositedFileRepository,
+        deposit_sessions: DepositSessionRepository,
+        object_storage: ObjectStorage,
+        clock: Clock,
+      ): ClientUploadAuthorizer =>
+        new ClientUploadAuthorizationService({
+          deposit_requests,
+          deposited_files,
+          deposit_sessions,
+          object_storage,
+          clock,
+        }),
+    },
+    {
+      provide: CLIENT_FILE_REMOVER,
+      inject: [DEPOSIT_REQUEST_REPOSITORY, DEPOSITED_FILE_REPOSITORY, OBJECT_STORAGE],
+      useFactory: (
+        deposit_requests: DepositRequestRepository,
+        deposited_files: DepositedFileRepository,
+        object_storage: ObjectStorage,
+      ): ClientFileRemover =>
+        new ClientFileRemovalService({ deposit_requests, deposited_files, object_storage }),
+    },
   ],
-  exports: [DEPOSIT_SESSION_REPOSITORY, CLIENT_PIN_THROTTLE_STORE, DEPOSIT_LINK_UNLOCKER],
+  exports: [
+    DEPOSIT_SESSION_REPOSITORY,
+    CLIENT_PIN_THROTTLE_STORE,
+    DEPOSIT_LINK_UNLOCKER,
+    CLIENT_UPLOAD_AUTHORIZER,
+    CLIENT_FILE_REMOVER,
+  ],
 })
 export class DepositSessionModule {}

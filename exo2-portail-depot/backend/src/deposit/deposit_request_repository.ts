@@ -4,6 +4,7 @@ import { access_link, deposit_request, expected_document } from '../db/schema/de
 import type { DepositRequestStatus } from '../domain/deposit_request_status';
 import type { DepositRequestCreationInput, ExpectedDocument } from '../domain/expected_document';
 import type { SecurityPolicy } from '../domain/security_policy';
+import type { DepositedFileRepository } from '../deposited_file/deposited_file_repository';
 
 export const DEPOSIT_REQUEST_REPOSITORY: unique symbol = Symbol('DEPOSIT_REQUEST_REPOSITORY');
 
@@ -32,6 +33,10 @@ export interface DepositRequestDetail {
 // la politique de securite, ni les compteurs d'echecs.
 export interface ClientDepositRequestView {
   title: string;
+  // Le client a besoin du statut : c'est lui qui dit si une piece peut encore
+  // etre retiree. Le lui cacher l'obligerait a decouvrir l'interdiction en la
+  // heurtant.
+  status: DepositRequestStatus;
   expected_documents: ExpectedDocument[];
 }
 
@@ -64,7 +69,10 @@ export interface DepositRequestRepository {
 const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class DrizzleDepositRequestRepository implements DepositRequestRepository {
-  constructor(private readonly database: ApplicationDatabase) {}
+  constructor(
+    private readonly database: ApplicationDatabase,
+    private readonly deposited_files: DepositedFileRepository,
+  ) {}
 
   // Une seule transaction : une demande sans ses documents attendus serait une
   // demande que le client ouvre pour n'y rien trouver a deposer, et rien
@@ -122,13 +130,16 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
       await this.count_expected_documents(listed_request_ids);
     const link_expiry_by_request: Map<string, Date> =
       await this.read_current_link_expiries(listed_request_ids);
+    const deposited_by_request: Map<string, number> =
+      await this.deposited_files.count_occupied_expected_documents(listed_request_ids);
 
     return rows.map((row): DepositRequestOverview => ({
       ...row,
       expected_document_count: documents_by_request.get(row.id) ?? 0,
-      // Zero AUJOURD'HUI, et non par defaut : aucune piece ne peut avoir ete
-      // deposee, la table n'existe pas encore. A brancher a l'etape 5.
-      deposited_document_count: 0,
+      // Ne compte que ce qui OCCUPE reellement un emplacement : une reservation
+      // dont l'objet n'est jamais arrive ferait croire a l'avocat que le client
+      // a depose, et le « 2 pieces sur 4 » cesserait d'etre honnete.
+      deposited_document_count: deposited_by_request.get(row.id) ?? 0,
       // `null` veut dire « aucun lien courant » : soit l'avocat n'en a jamais
       // emis, soit le dernier a ete revoque ou bloque. L'echeance rendue peut
       // etre DEJA PASSEE, et c'est voulu — le statut ne dit que ce qu'une
@@ -191,7 +202,7 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
 
   async find_client_view(deposit_request_id: string): Promise<ClientDepositRequestView | null> {
     const rows = await this.database
-      .select({ title: deposit_request.title })
+      .select({ title: deposit_request.title, status: deposit_request.status })
       .from(deposit_request)
       .where(eq(deposit_request.id, deposit_request_id));
 
@@ -208,6 +219,7 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
 
     return {
       title: found.title,
+      status: found.status,
       expected_documents: documents.map((document): ExpectedDocument => ({
         id: document.id,
         deposit_request_id: document.deposit_request_id,

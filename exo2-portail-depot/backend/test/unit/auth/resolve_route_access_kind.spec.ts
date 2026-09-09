@@ -14,7 +14,7 @@ describe('resolve_route_access_kind', () => {
     );
   });
 
-  it.each<RouteAccessKind>(['lawyer', 'client_link', 'internal', 'health', 'public_auth'])(
+  it.each<RouteAccessKind>(['lawyer', 'client_link', 'client_session', 'internal', 'health', 'public_auth'])(
     'un unique kind declare (%s) est renvoye tel quel',
     (kind: RouteAccessKind) => {
       expect(resolve_route_access_kind([kind])).toBe(kind);

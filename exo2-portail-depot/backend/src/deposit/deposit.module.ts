@@ -21,5 +21,6 @@ import {
         new DrizzleDepositRequestRepository(database),
     },
   ],
+  exports: [DEPOSIT_REQUEST_REPOSITORY],
 })
 export class DepositModule {}

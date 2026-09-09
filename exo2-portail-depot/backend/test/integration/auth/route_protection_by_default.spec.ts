@@ -44,6 +44,11 @@ const NON_LAWYER_ROUTE_WHITELIST: ReadonlyArray<
     declaration.http_method === 'GET' && declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token`,
   (declaration) =>
     declaration.http_method === 'POST' && declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token/unlock`,
+  // Non anonyme malgre son prefixe : le garde de session de depot l'exige. Elle
+  // figure ici parce qu'elle n'est pas 'lawyer', pas parce qu'elle est ouverte.
+  (declaration) =>
+    declaration.http_method === 'GET' &&
+    declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token/documents`,
   // [F6] La surface d'authentification, declaree a la main parce qu'elle
   // echappe au routeur Nest. Trois chemins EXACTS et rien de plus : la
   // bibliotheque en expose une trentaine sous le meme prefixe, et le montage
@@ -59,6 +64,7 @@ const NON_LAWYER_ROUTE_WHITELIST: ReadonlyArray<
 const VALID_ROUTE_ACCESS_KINDS: readonly RouteAccessKind[] = [
   'lawyer',
   'client_link',
+  'client_session',
   'internal',
   'health',
   'public_auth',

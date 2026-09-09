@@ -6,6 +6,7 @@ import { ClockModule } from './shared/clock.module';
 import { Argon2ConcurrencyModule } from './shared/argon2_concurrency.module';
 import { AccessLinkModule } from './access_link/access_link.module';
 import { DepositSessionModule } from './deposit_session/deposit_session.module';
+import { ClientDepositSessionGuard } from './deposit_session/client_deposit_session.guard';
 import { DatabaseModule } from './db/database.module';
 import { LawyerAuthModule } from './auth/lawyer_auth.module';
 import { DepositModule } from './deposit/deposit.module';
@@ -39,6 +40,9 @@ import { UnroutedRequestFilter } from './auth/unrouted_request.filter';
     // Global, et c'est tout l'interet : une route ajoutee demain est fermee
     // sans que son auteur ait a y penser.
     { provide: APP_GUARD, useClass: RouteAccessGuard },
+    // Le second mecanisme, et un garde a lui : le premier laisse passer tout ce
+    // qui n'est pas 'lawyer', celui-ci ne connait que la session de depot.
+    { provide: APP_GUARD, useClass: ClientDepositSessionGuard },
     { provide: APP_FILTER, useClass: UnroutedRequestFilter },
   ],
 })

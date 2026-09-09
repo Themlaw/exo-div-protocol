@@ -8,6 +8,11 @@ import { SetMetadata } from '@nestjs/common';
 export type RouteAccessKind =
   | 'lawyer'
   | 'client_link'
+  // Distincte de `client_link` : la premiere est ANONYME — n'importe qui peut
+  // frapper la route et c'est le jeton plus le PIN qui decident — la seconde
+  // exige une session de depot deja ouverte. Les confondre rendrait anonyme,
+  // le jour d'un copier-coller, une route qui rend le contenu d'un dossier.
+  | 'client_session'
   | 'internal'
   | 'health'
   // Se connecter ne peut pas exiger d'etre deja connecte : la surface
@@ -25,6 +30,9 @@ export const DEFAULT_ROUTE_ACCESS_KIND: RouteAccessKind = 'lawyer';
 
 export const ClientLinkRoute = (): MethodDecorator & ClassDecorator =>
   SetMetadata(ROUTE_ACCESS_METADATA_KEY, 'client_link' satisfies RouteAccessKind);
+
+export const ClientSessionRoute = (): MethodDecorator & ClassDecorator =>
+  SetMetadata(ROUTE_ACCESS_METADATA_KEY, 'client_session' satisfies RouteAccessKind);
 
 export const InternalRoute = (): MethodDecorator & ClassDecorator =>
   SetMetadata(ROUTE_ACCESS_METADATA_KEY, 'internal' satisfies RouteAccessKind);

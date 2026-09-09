@@ -27,6 +27,14 @@ export interface DepositRequestDetail {
   expected_documents: ExpectedDocument[];
 }
 
+// Ce que le CLIENT voit une fois le PIN passe : le titre, pour qu'il sache quel
+// dossier il ouvre, et la liste de ce qu'on lui demande. Ni le proprietaire, ni
+// la politique de securite, ni les compteurs d'echecs.
+export interface ClientDepositRequestView {
+  title: string;
+  expected_documents: ExpectedDocument[];
+}
+
 export interface DepositRequestRepository {
   create(input: {
     owner_user_id: string;
@@ -43,6 +51,11 @@ export interface DepositRequestRepository {
     deposit_request_id: string,
     owner_user_id: string,
   ): Promise<DepositRequestDetail | null>;
+
+  // Sans predicat d'appartenance, et c'est voulu : l'autorisation est portee
+  // par la session de depot, qui designe le lien, qui designe la demande.
+  // Exiger ici un proprietaire obligerait a en fabriquer un cote client.
+  find_client_view(deposit_request_id: string): Promise<ClientDepositRequestView | null>;
 }
 
 // Un identifiant qui n'est pas un UUID ne doit pas atteindre Postgres : la
@@ -165,6 +178,36 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
         pin_length: found.pin_length,
       },
       created_at: found.created_at,
+      expected_documents: documents.map((document): ExpectedDocument => ({
+        id: document.id,
+        deposit_request_id: document.deposit_request_id,
+        label: document.label,
+        position: document.position,
+        allowed_mime_types: document.allowed_mime_types,
+        max_size_bytes: document.max_size_bytes,
+      })),
+    };
+  }
+
+  async find_client_view(deposit_request_id: string): Promise<ClientDepositRequestView | null> {
+    const rows = await this.database
+      .select({ title: deposit_request.title })
+      .from(deposit_request)
+      .where(eq(deposit_request.id, deposit_request_id));
+
+    const found = rows[0];
+    if (found === undefined) {
+      return null;
+    }
+
+    const documents = await this.database
+      .select()
+      .from(expected_document)
+      .where(eq(expected_document.deposit_request_id, deposit_request_id))
+      .orderBy(asc(expected_document.position));
+
+    return {
+      title: found.title,
       expected_documents: documents.map((document): ExpectedDocument => ({
         id: document.id,
         deposit_request_id: document.deposit_request_id,

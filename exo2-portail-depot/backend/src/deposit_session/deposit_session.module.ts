@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APPLICATION_DATABASE } from '../db/database.module';
 import type { ApplicationDatabase } from '../db/database_connection';
 import { AccessLinkModule } from '../access_link/access_link.module';
+import { DepositModule } from '../deposit/deposit.module';
 import {
   ACCESS_LINK_REPOSITORY,
   type AccessLinkRepository,
@@ -33,7 +34,7 @@ import {
 import { PublicDepositLinkController } from './public_deposit_link.controller';
 
 @Module({
-  imports: [AccessLinkModule],
+  imports: [AccessLinkModule, DepositModule],
   controllers: [PublicDepositLinkController],
   providers: [
     {

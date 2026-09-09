@@ -16,8 +16,15 @@ import { DEFAULT_SECURITY_POLICY } from '../../../src/domain/security_policy';
 import { CLIENT_DEPOSIT_SESSION_LIFETIME_SECONDS } from '../../../src/deposit_session/unlock_deposit_link';
 
 interface IssuedLink {
+  deposit_request_id: string;
   token: string;
   pin: string;
+}
+
+interface ClientDepositBoardBody {
+  title: string;
+  session_expires_at: string;
+  expected_documents: readonly { id: string; label: string; position: number }[];
 }
 
 // Le lien remis est une URL de FRONT : le jeton que l'API attend en est le
@@ -50,8 +57,12 @@ describe('Deverrouillage public du lien de depot', () => {
       })
       .expect(201);
 
-    const delivery = (response.body as { access_link: { url: string; pin: string } }).access_link;
-    return { token: extract_token_from_delivered_url(delivery.url), pin: delivery.pin };
+    const created = response.body as { id: string; access_link: { url: string; pin: string } };
+    return {
+      deposit_request_id: created.id,
+      token: extract_token_from_delivered_url(created.access_link.url),
+      pin: created.access_link.pin,
+    };
   }
 
   function unlock(token: string, submitted_pin: unknown): request.Test {
@@ -65,6 +76,17 @@ describe('Deverrouillage public du lien de depot', () => {
       .split('')
       .map((digit: string): string => String((Number(digit) + 1) % 10))
       .join('');
+  }
+
+  async function unlock_and_keep_cookie(link: IssuedLink): Promise<string> {
+    const response = await unlock(link.token, link.pin).expect(200);
+    const [session_cookie] = response.headers['set-cookie'] as unknown as string[];
+    return session_cookie.split(';')[0];
+  }
+
+  function read_documents(token: string, session_cookie?: string): request.Test {
+    const pending = request(app.getHttpServer()).get(`${PUBLIC_DEPOSIT_PATH}/${token}/documents`);
+    return session_cookie === undefined ? pending : pending.set('Cookie', session_cookie);
   }
 
   beforeAll(async () => {
@@ -184,5 +206,56 @@ describe('Deverrouillage public du lien de depot', () => {
 
     await request(app.getHttpServer()).get(`${PUBLIC_DEPOSIT_PATH}/${link.token}`).expect(200);
     await unlock(link.token, link.pin).expect(200);
+  });
+  it('la session ouverte donne le titre et la liste de ce qui est attendu', async () => {
+    const link = await issue_link();
+    const session_cookie: string = await unlock_and_keep_cookie(link);
+
+    const response = await read_documents(link.token, session_cookie).expect(200);
+    const board = response.body as ClientDepositBoardBody;
+
+    expect(board.title).toBe('Dossier de succession');
+    expect(board.expected_documents.map((document) => document.label)).toEqual(['Acte de deces']);
+    expect(new Date(board.session_expires_at).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('sans cookie de session, la route ne rend rien : le PIN n est pas contournable', async () => {
+    const link = await issue_link();
+
+    const refused = await read_documents(link.token).expect(401);
+    expect(refused.body).not.toHaveProperty('title');
+  });
+
+  it('un cookie de session invente est refuse comme une absence de cookie', async () => {
+    const link = await issue_link();
+
+    await read_documents(link.token, `${DEPOSIT_SESSION_COOKIE_NAME}=jeton-invente`).expect(401);
+  });
+
+  // LA propriete que le garde porte seul : la session designe UN lien. Sans la
+  // comparaison, un client legitime lirait le dossier d'un autre en changeant
+  // le jeton dans l'adresse.
+  it('une session valide ne lit pas le dossier d un autre lien', async () => {
+    const own_link = await issue_link();
+    const other_link = await issue_link();
+    const session_cookie: string = await unlock_and_keep_cookie(own_link);
+
+    await read_documents(own_link.token, session_cookie).expect(200);
+    await read_documents(other_link.token, session_cookie).expect(401);
+  });
+
+  // Ce que le jeton autoportant n'aurait pas su faire : la revocation prend
+  // effet au PROCHAIN appel, pas a l'expiration de la session.
+  it('la revocation du lien par l avocat ferme la session en cours', async () => {
+    const link = await issue_link();
+    const session_cookie: string = await unlock_and_keep_cookie(link);
+    await read_documents(link.token, session_cookie).expect(200);
+
+    await request(app.getHttpServer())
+      .delete(`${DEPOSIT_REQUESTS_PATH}/${link.deposit_request_id}/links/current`)
+      .set('Cookie', lawyer_cookie)
+      .expect(204);
+
+    await read_documents(link.token, session_cookie).expect(401);
   });
 });

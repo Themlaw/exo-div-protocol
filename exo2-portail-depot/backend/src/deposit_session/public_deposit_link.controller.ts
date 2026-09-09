@@ -8,9 +8,10 @@ import {
   Param,
   Post,
   Req,
+  UnauthorizedException,
   Res,
 } from '@nestjs/common';
-import { ClientLinkRoute } from '../auth/route_access';
+import { ClientLinkRoute, ClientSessionRoute } from '../auth/route_access';
 import {
   DEPOSIT_SESSION_COOKIE_NAME,
   PUBLIC_DEPOSIT_PATH,
@@ -36,6 +37,14 @@ import {
   type DepositLinkUnlocker,
 } from './unlock_deposit_link';
 import { CLIENT_PIN_IP_RATE_LIMIT_BOUNDS } from './client_pin_throttle_store';
+import { read_authenticated_deposit_session } from './client_deposit_session.guard';
+import type { OpenedDepositSession } from './deposit_session_repository';
+import {
+  DEPOSIT_REQUEST_REPOSITORY,
+  type ClientDepositRequestView,
+  type DepositRequestRepository,
+} from '../deposit/deposit_request_repository';
+import type { ExpectedDocument } from '../domain/expected_document';
 
 // Ce que le client anonyme a le droit de savoir AVANT le PIN : l'etat, et la
 // longueur du code pour dessiner la saisie. Ni titre, ni nombre de pieces, ni
@@ -51,11 +60,33 @@ interface PublicAccessLinkView {
 // reviendrait a repondre « ce token existe » a qui en essaie au hasard.
 const GENERIC_REFUSAL_BODY = { state: 'invalid' } as const;
 
+// Ce que le client voit une fois le PIN passe. Le titre apparait ICI et pas
+// avant : sur la page d'accueil du lien il serait une fuite, derriere le PIN il
+// est ce qui permet de savoir quel dossier on ouvre.
+interface ClientDepositBoardView {
+  title: string;
+  session_expires_at: string;
+  expected_documents: readonly ClientExpectedDocumentView[];
+}
+
+interface ClientExpectedDocumentView {
+  id: string;
+  label: string;
+  position: number;
+  allowed_mime_types: readonly string[];
+  max_size_bytes: number;
+}
+
+// L'acces est declare PAR METHODE et non sur la classe : ce controleur porte
+// deux surfaces qui n'ont rien a voir — deux routes anonymes, ou le jeton et le
+// PIN decident, et une route adossee a une session ouverte. Un acces de classe
+// aurait rendu l'une des deux fausse, quelle qu'elle soit.
 @Controller('public')
-@ClientLinkRoute()
 export class PublicDepositLinkController {
   constructor(
     @Inject(ACCESS_LINK_REPOSITORY) private readonly access_links: AccessLinkRepository,
+    @Inject(DEPOSIT_REQUEST_REPOSITORY)
+    private readonly deposit_requests: DepositRequestRepository,
     @Inject(ACCESS_LINK_TOKEN_HASHER) private readonly token_hasher: AccessLinkTokenHasher,
     @Inject(DEPOSIT_LINK_UNLOCKER) private readonly unlocker: DepositLinkUnlocker,
     @Inject(APPLICATION_ENVIRONMENT) private readonly environment: ApplicationEnvironment,
@@ -63,6 +94,7 @@ export class PublicDepositLinkController {
   ) {}
 
   @Get(':token')
+  @ClientLinkRoute()
   async read_public_link_state(@Param('token') token: string): Promise<PublicAccessLinkView> {
     const { token_hmac } = this.token_hasher.fingerprint_token(token);
     const link = await this.access_links.find_by_token_hmac(token_hmac);
@@ -78,7 +110,50 @@ export class PublicDepositLinkController {
       : { state };
   }
 
+  // Le jeton de l'URL n'est PAS relu ici : le garde a deja verifie que la
+  // session presentee est bien celle de ce lien-la. Le refaire ouvrirait la
+  // porte a deux verdicts divergents.
+  @Get(':token/documents')
+  @ClientSessionRoute()
+  async list_documents_to_deposit(@Req() request: IncomingMessage): Promise<ClientDepositBoardView> {
+    // Le garde a depose la session ici. La relire nullable plutot que
+    // l'affirmer : un `as` mentirait au compilateur le jour ou quelqu'un
+    // retirerait le decorateur d'acces, et la route rendrait un 500 au lieu
+    // d'un refus.
+    const opened_session: OpenedDepositSession | null =
+      read_authenticated_deposit_session(request);
+    if (opened_session === null) {
+      throw new UnauthorizedException();
+    }
+
+    const view: ClientDepositRequestView | null = await this.deposit_requests.find_client_view(
+      opened_session.access_link.deposit_request_id,
+    );
+
+    // Une session valide dont la demande a disparu ne peut pas exister : la
+    // cle etrangere du lien vers la demande l'interdit. Refuser plutot que
+    // supposer, sans distinguer ce cas des autres refus.
+    if (view === null) {
+      throw new UnauthorizedException();
+    }
+
+    return {
+      title: view.title,
+      session_expires_at: opened_session.session.expires_at.toISOString(),
+      expected_documents: view.expected_documents.map(
+        (document: ExpectedDocument): ClientExpectedDocumentView => ({
+          id: document.id,
+          label: document.label,
+          position: document.position,
+          allowed_mime_types: document.allowed_mime_types,
+          max_size_bytes: document.max_size_bytes,
+        }),
+      ),
+    };
+  }
+
   @Post(':token/unlock')
+  @ClientLinkRoute()
   @HttpCode(200)
   async unlock_deposit_link(
     @Param('token') token: string,

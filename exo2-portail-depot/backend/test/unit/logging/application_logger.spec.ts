@@ -393,3 +393,32 @@ describe('le message est masque et borne comme les champs', () => {
     expect(JSON.parse(formatted).message).toBe('application demarree');
   });
 });
+
+// Une URL presignee est un porteur d'autorisation complet : qui l'a peut lire
+// la piece. Elle finira dans des messages d'erreur de stockage, et sa signature
+// ne ressemble a aucun des fragments deja surveilles.
+describe('les URL presignees ne fuient pas dans les journaux', () => {
+  it('la signature AWS est masquee dans un message', () => {
+    const formatted: string = format_log_entry({
+      level: 'error',
+      message:
+        'echec du telechargement https://stockage/piece.pdf?X-Amz-Signature=3f1a9c8b7d6e5f4a&X-Amz-Expires=60',
+      context: 'storage',
+      timestamp: '2026-09-09T12:00:00.000Z',
+    });
+
+    expect(formatted).not.toContain('3f1a9c8b7d6e5f4a');
+  });
+
+  it('la signature AWS est masquee dans un champ', () => {
+    const formatted: string = format_log_entry({
+      level: 'info',
+      message: 'lien de telechargement emis',
+      context: 'storage',
+      timestamp: '2026-09-09T12:00:00.000Z',
+      fields: { 'X-Amz-Signature': '3f1a9c8b7d6e5f4a' },
+    });
+
+    expect(formatted).not.toContain('3f1a9c8b7d6e5f4a');
+  });
+});

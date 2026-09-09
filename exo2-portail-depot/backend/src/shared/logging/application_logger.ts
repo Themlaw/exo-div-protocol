@@ -36,6 +36,9 @@ export const REDACTED_FIELD_NAME_FRAGMENTS: readonly string[] = [
   'authorization',
   'cookie',
   'credential',
+  // Une URL presignee est un porteur d'autorisation complet : qui l'a peut lire
+  // la piece. Sa signature ne ressemble a aucun des fragments ci-dessus.
+  'signature',
 ];
 
 export const REDACTED_VALUE_PLACEHOLDER = '[redacted]';
@@ -69,8 +72,14 @@ function is_redacted_field_name(field_name: string): boolean {
 const SECRET_BEARING_TEXT_PATTERNS: readonly RegExp[] = [
   // scheme://utilisateur:motdepasse@hote
   /([a-z][a-z0-9+.-]*:\/\/[^\s:@/]+):[^\s@/]+@/gi,
-  // clef=valeur ou clef: valeur, ou la clef porte un des fragments sensibles
-  /\b([a-z_]*(?:password|motdepasse|secret|token|pepper|pin|credential)[a-z_]*)\s*[=:]\s*("[^"]*"|'[^']*'|[^\s,;&)]+)/gi,
+  // clef=valeur ou clef: valeur, ou la clef porte un des fragments sensibles.
+  // Construit A PARTIR de la liste, et non recopie : les deux avaient diverge,
+  // et une signature presignee passait dans un texte alors qu'elle etait bien
+  // masquee dans un champ. Aucun fragment ne porte de metacaractere.
+  new RegExp(
+    `\\b([a-z_]*(?:${REDACTED_FIELD_NAME_FRAGMENTS.join('|')})[a-z_]*)\\s*[=:]\\s*("[^"]*"|'[^']*'|[^\\s,;&)]+)`,
+    'gi',
+  ),
   /\b(bearer|basic)\s+[\w.\-~+/=]+/gi,
 ];
 

@@ -27,19 +27,20 @@ async function bootstrap(): Promise<void> {
   // Postgres reste ouverte a l'arret du conteneur.
   app.enableShutdownHooks();
 
-  apply_http_hardening(app.getHttpAdapter().getInstance());
+  const environment: ApplicationEnvironment = app.get(APPLICATION_ENVIRONMENT);
+
+  apply_http_hardening(app.getHttpAdapter().getInstance(), environment.node_environment);
 
   const logger: ApplicationLogger = app.get(APPLICATION_LOGGER);
 
   // Avant `listen`, donc avant que le routeur Nest ne soit en place : c'est
   // lui qui repondrait 404 sur /api/auth, ces chemins n'ayant aucun controleur.
   mount_lawyer_auth_handler(app, app.get<LawyerAuth>(LAWYER_AUTH), logger);
+
   // Le port passe par la validation de l'environnement comme le reste : une
   // lecture directe de `process.env` ici serait le seul reglage a echapper au
   // controle de demarrage, et une valeur illisible ferait ecouter le service
   // sur un port choisi par hasard.
-  const environment: ApplicationEnvironment = app.get(APPLICATION_ENVIRONMENT);
-
   await app.listen(environment.http_port);
   logger.info(APPLICATION_LOG_CONTEXT, 'application demarree', {
     port: environment.http_port,

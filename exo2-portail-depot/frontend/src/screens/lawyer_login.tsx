@@ -1,8 +1,9 @@
 import { useState, type FormEvent, type ReactElement } from 'react';
-import { Heading, Stack, Text } from '@chakra-ui/react';
+import { Heading, Spinner, Stack, Text } from '@chakra-ui/react';
 import { useLocation, useNavigate, type Location, type NavigateFunction } from 'react-router-dom';
 
 import { lawyer_auth_client } from '../auth/lawyer_auth_client';
+import { use_lawyer_session_reload } from '../auth/lawyer_session';
 import { LAWYER_DEPOSIT_REQUESTS_PATH } from '../routing/front_routes';
 import { PrimaryButton } from '../ui/div_button';
 import { TextField } from '../ui/text_field';
@@ -19,6 +20,7 @@ interface IntendedDestination {
 
 export function LawyerLoginScreen(): ReactElement {
   const navigate: NavigateFunction = useNavigate();
+  const reload_lawyer_session: () => Promise<void> = use_lawyer_session_reload();
   const location: Location = useLocation();
   const [email, set_email] = useState<string>('');
   const [password, set_password] = useState<string>('');
@@ -39,9 +41,8 @@ export function LawyerLoginScreen(): ReactElement {
 
     const outcome = await lawyer_auth_client.signIn.email({ email: email.trim(), password });
 
-    set_is_signing_in(false);
-
     if (outcome.error !== null && outcome.error !== undefined) {
+      set_is_signing_in(false);
       // Le mot de passe est efface, jamais l'adresse : on ne refait pas saisir
       // ce qui n'est pas secret.
       set_password('');
@@ -50,6 +51,13 @@ export function LawyerLoginScreen(): ReactElement {
       return;
     }
 
+    // La session est relue ICI, avant de naviguer, et l'attente est portee
+    // jusque-la : la garde de la route d'arrivee lit un magasin qui, sans cette
+    // relecture, ignore encore la connexion et la renverrait sur ce formulaire.
+    // `use_lawyer_session_reload` porte le detail.
+    await reload_lawyer_session();
+
+    set_is_signing_in(false);
     navigate(read_intended_path(location.state), { replace: true });
   }
 
@@ -82,7 +90,18 @@ export function LawyerLoginScreen(): ReactElement {
           )}
 
           <PrimaryButton type="submit" disabled={is_signing_in}>
-            {is_signing_in ? 'Connexion en cours' : 'Se connecter'}
+            {/* La verification du mot de passe est volontairement couteuse
+                (argon2id) et la session est relue ensuite : l'attente se compte
+                en centaines de millisecondes. Un bouton seulement grise laisse
+                croire a un ecran fige. */}
+            {is_signing_in ? (
+              <Stack direction="row" gap="2" align="center" justify="center">
+                <Spinner size="xs" borderWidth="2px" />
+                <span>Connexion en cours</span>
+              </Stack>
+            ) : (
+              'Se connecter'
+            )}
           </PrimaryButton>
         </Stack>
       </form>

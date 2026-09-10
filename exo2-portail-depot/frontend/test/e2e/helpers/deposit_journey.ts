@@ -25,7 +25,15 @@ export function demo_lawyer_credentials(): { email: string; password: string } {
 export async function sign_in_as_the_demo_lawyer(page: Page): Promise<void> {
   const { email, password } = demo_lawyer_credentials();
 
-  await page.goto('/login');
+  // On entre par la racine et non par `/login` : c'est le trajet reel de
+  // l'avocat, et c'est LUI qui a revele le bug de la double connexion. Arriver
+  // directement sur le formulaire laisse le magasin de session de better-auth
+  // vierge ; passer par une route gardee le fait monter, repondre « anonyme »,
+  // puis se demonter en figeant cette reponse — que la garde relisait apres la
+  // connexion. Aucun scenario ne le voyait tant qu'ils commencaient tous ici.
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Connexion' })).toBeVisible();
+
   await page.getByLabel('Adresse e-mail').fill(email);
   await page.getByLabel('Mot de passe').fill(password);
   await page.getByRole('button', { name: 'Se connecter' }).click();
@@ -66,9 +74,12 @@ export async function create_deposit_request_through_the_form(
   return read_delivered_access_link((await delivery_dialog.innerText()) ?? '');
 }
 
-// Cree la demande par l'API plutot que par le formulaire, et pour une seule
-// raison : la politique de securite — le plafond d'essais de code — n'est pas
-// encore reglable a l'ecran. La session avocat de la page porte la requete.
+// Cree la demande par l'API plutot que par le formulaire. Le formulaire sait
+// desormais regler le plafond d'essais de code, donc ce chemin n'est plus une
+// contrainte mais un choix : ce scenario-ci porte sur le BLOCAGE du lien, et
+// remplir un formulaire pour y arriver l'allongerait et le ferait echouer pour
+// des raisons etrangeres a ce qu'il verifie. La session avocat de la page porte
+// la requete.
 export async function create_deposit_request_through_the_api(
   api: APIRequestContext,
   input: { readonly title: string; readonly max_pin_attempts: number },

@@ -24,3 +24,17 @@ export function use_lawyer_session(): LawyerSessionState {
 
   return { status: 'authenticated', lawyer_email: session.data.user.email };
 }
+
+// La garde est le SEUL lecteur du magasin de session, et le magasin de
+// better-auth est un atome nanostores : il se demonte des que plus personne ne
+// le lit — c'est-a-dire pendant que le formulaire de connexion est affiche.
+// Demonte, il fige sa derniere valeur (« anonyme ») et n'ecoute plus le signal
+// emis par la connexion reussie. Naviguer vers une route gardee sans avoir relu
+// la session fait donc lire a la garde qui se remonte une valeur perimee : elle
+// renvoie au formulaire, et l'avocat doit se connecter deux fois.
+//
+// Appeler ce hook depuis le formulaire remonte le magasin tant qu'il est
+// affiche, et la relecture qu'il rend est attendue avant de naviguer.
+export function use_lawyer_session_reload(): () => Promise<void> {
+  return lawyer_auth_client.useSession().refetch;
+}

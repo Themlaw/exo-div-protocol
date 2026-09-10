@@ -1,16 +1,29 @@
+# La verification de exo2-portail-depot. Tous les chemins sont prefixes par le
+# nom de son dossier : dans un monorepo, GitHub n'execute que les workflows de
+# `.github/workflows/` a la RACINE, et le repertoire de travail par defaut est
+# celui du depot entier.
+#
 # Un job par nature de verification, et pas un seul job « tests » : les suites
 # unitaires rendent leur verdict en une minute, les suites qui demandent
 # Postgres, MinIO et clamav en demandent plusieurs. Les separer donne le retour
 # rapide tout de suite, au lieu de le faire attendre derriere le plus lent.
-name: Verification
+name: Verification exo2
 
 on:
+  # Volontairement SANS filtre de chemins. Un filtre `paths` s'applique aussi aux
+  # poussees d'etiquettes, ou il se compare au diff du commit : une etiquette
+  # `v1.2.3` posee sur un commit qui ne touche pas exo2 ne declencherait alors
+  # rien, et la version ne serait jamais publiee — en silence. Le prix a payer
+  # est une verification de trop quand seul exo1 bouge, et exo1 est termine.
   push:
     branches: [main]
     # Une etiquette `v1.2.3` publie les images sous `1.2.3` en plus de `latest` :
     # c'est ce qui permet d'epingler une version connue et d'y revenir.
     tags: ['v*']
   pull_request:
+    paths:
+      - 'exo2-portail-depot/**'
+      - '.github/workflows/ci.yml'
 
 # Un push qui en remplace un autre annule la verification en cours : ce depot
 # n'a aucune raison de payer deux fois pour un commit deja depasse.
@@ -34,16 +47,16 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: backend/package-lock.json
+          cache-dependency-path: exo2-portail-depot/backend/package-lock.json
 
       - run: npm ci
-        working-directory: backend
+        working-directory: exo2-portail-depot/backend
 
       - run: npm run lint
-        working-directory: backend
+        working-directory: exo2-portail-depot/backend
 
       - name: Tests unitaires
-        working-directory: backend
+        working-directory: exo2-portail-depot/backend
         # Le meme drapeau que dans package.json : Jest execute des modules ES,
         # et sans lui les fichiers de test ne sont meme pas charges.
         run: NODE_OPTIONS=--experimental-vm-modules npx jest --ci
@@ -58,23 +71,23 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: exo2-portail-depot/frontend/package-lock.json
 
       - run: npm ci
-        working-directory: frontend
+        working-directory: exo2-portail-depot/frontend
 
       # Le `typecheck` du front comprend le test de derive des contrats, qui
       # compile les sources du BACKEND : sans ses dependances, le compilateur ne
       # resout pas `drizzle-orm` et rend des centaines de fausses erreurs.
       - name: Dependances du backend, pour la derive des contrats
         run: npm ci --ignore-scripts
-        working-directory: backend
+        working-directory: exo2-portail-depot/backend
 
       - run: npm run typecheck
-        working-directory: frontend
+        working-directory: exo2-portail-depot/frontend
 
       - run: npx vitest run
-        working-directory: frontend
+        working-directory: exo2-portail-depot/frontend
 
   integration:
     name: Backend — tests d'integration
@@ -86,16 +99,17 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: backend/package-lock.json
+          cache-dependency-path: exo2-portail-depot/backend/package-lock.json
 
       - run: npm ci
-        working-directory: backend
+        working-directory: exo2-portail-depot/backend
 
       - name: Postgres, MinIO et clamav
+        working-directory: exo2-portail-depot
         run: ./infra/ci/prepare_test_environment.sh
 
       - name: Tests d'integration
-        working-directory: backend
+        working-directory: exo2-portail-depot/backend
         run: |
           set -a
           . ../.env
@@ -104,6 +118,7 @@ jobs:
 
       - name: Journaux des services en cas d'echec
         if: failure()
+        working-directory: exo2-portail-depot
         run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs --tail 200
 
   bout_en_bout:
@@ -120,23 +135,24 @@ jobs:
           # nommer que l'un ferait porter le cache sur une empreinte qui ne
           # change pas quand l'autre bouge.
           cache-dependency-path: |
-            backend/package-lock.json
-            frontend/package-lock.json
+            exo2-portail-depot/backend/package-lock.json
+            exo2-portail-depot/frontend/package-lock.json
 
       - run: npm ci
-        working-directory: backend
+        working-directory: exo2-portail-depot/backend
 
       - run: npm ci
-        working-directory: frontend
+        working-directory: exo2-portail-depot/frontend
 
       # Chromium seul : les trois scenarios de bureau et celui de mobile
       # tournent tous dessus, et telecharger Firefox et WebKit pour rien
       # ajouterait plusieurs minutes a chaque verification.
       - name: Navigateur
         run: npx playwright install --with-deps chromium
-        working-directory: frontend
+        working-directory: exo2-portail-depot/frontend
 
       - name: Postgres, MinIO et clamav
+        working-directory: exo2-portail-depot
         run: ./infra/ci/prepare_test_environment.sh
 
       # L'API, le worker et le serveur Vite sont demarres par la configuration
@@ -144,7 +160,7 @@ jobs:
       # pile n'est pas rejouable sur un poste.
       - name: Scenarios
         run: npx playwright test
-        working-directory: frontend
+        working-directory: exo2-portail-depot/frontend
 
       - name: Rapport en cas d'echec
         if: failure()
@@ -152,8 +168,8 @@ jobs:
         with:
           name: rapport-playwright
           path: |
-            frontend/playwright-report
-            frontend/test-results
+            exo2-portail-depot/frontend/playwright-report
+            exo2-portail-depot/frontend/test-results
           retention-days: 7
 
   observabilite:
@@ -169,9 +185,9 @@ jobs:
       # deployee : verifier sur une autre reviendrait a ne rien verifier.
       - name: Regles d'alerte
         run: |
-          docker run --rm --volume "${{ github.workspace }}/observability/prometheus:/regles:ro" \
+          docker run --rm --volume "${{ github.workspace }}/exo2-portail-depot/observability/prometheus:/regles:ro" \
             --entrypoint promtool prom/prometheus:v3.5.0 check rules /regles/alert_rules.yml
-          docker run --rm --volume "${{ github.workspace }}/observability/prometheus:/regles:ro" \
+          docker run --rm --volume "${{ github.workspace }}/exo2-portail-depot/observability/prometheus:/regles:ro" \
             --entrypoint promtool prom/prometheus:v3.5.0 test rules /regles/alert_rules_test.yml
 
   images:
@@ -190,8 +206,8 @@ jobs:
       - name: Image de l'application
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: backend/Dockerfile
+          context: exo2-portail-depot
+          file: exo2-portail-depot/backend/Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -199,8 +215,8 @@ jobs:
       - name: Image du front
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: frontend/Dockerfile
+          context: exo2-portail-depot
+          file: exo2-portail-depot/frontend/Dockerfile
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -233,7 +249,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Le nom du depot peut porter des majuscules, jamais le nom d'une image :
-      # le registre refuserait la reference.
+      # le registre refuserait la reference. Les images s'appellent `portail-app`
+      # et `portail-web` : dans un depot qui porte deux exercices, `app` ne
+      # dirait pas de quoi il s'agit.
       - name: Nom des images
         id: noms
         run: echo "prefixe=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
@@ -246,7 +264,7 @@ jobs:
         id: metadonnees
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.noms.outputs.prefixe }}/app
+          images: ${{ steps.noms.outputs.prefixe }}/portail-app
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
@@ -256,8 +274,8 @@ jobs:
       - name: Image de l'application
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: backend/Dockerfile
+          context: exo2-portail-depot
+          file: exo2-portail-depot/backend/Dockerfile
           push: true
           tags: ${{ steps.metadonnees.outputs.tags }}
           labels: ${{ steps.metadonnees.outputs.labels }}
@@ -268,7 +286,7 @@ jobs:
         id: metadonnees_front
         uses: docker/metadata-action@v5
         with:
-          images: ${{ steps.noms.outputs.prefixe }}/web
+          images: ${{ steps.noms.outputs.prefixe }}/portail-web
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
@@ -278,8 +296,8 @@ jobs:
       - name: Image du front
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: frontend/Dockerfile
+          context: exo2-portail-depot
+          file: exo2-portail-depot/frontend/Dockerfile
           push: true
           tags: ${{ steps.metadonnees_front.outputs.tags }}
           labels: ${{ steps.metadonnees_front.outputs.labels }}

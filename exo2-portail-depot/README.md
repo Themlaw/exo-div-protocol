@@ -191,8 +191,8 @@ servent : l'API répond aux requêtes, le worker n'en sert aucune et ne rejoint
 donc jamais le réseau du proxy.
 
 **Le déploiement tire, le développement construit.** `infra/docker-compose.yml`
-ne contient aucune directive `build` : il désigne `ghcr.io/themlaw/exo2-portail-depot/app`
-et `.../web`. L'image publiée est la seule à avoir traversé toute la chaîne de
+ne contient aucune directive `build` : il désigne `ghcr.io/themlaw/exo-div-protocol/portail-app`
+et `.../portail-web`. L'image publiée est la seule à avoir traversé toute la chaîne de
 vérification ; une construction locale ne prouve que ce que la machine avait
 sous la main ce jour-là. La surcouche `infra/docker-compose.dev.yml` rend leur
 `build` aux trois services, pour essayer un correctif avant de le publier :
@@ -619,7 +619,9 @@ ne regardait rien.
 
 ### Intégration continue
 
-`.github/workflows/ci.yml` — six travaux : analyse statique et unitaires
+`../.github/workflows/ci.yml` — à la racine du dépôt, parce que GitHub n'exécute
+que les workflows qui s'y trouvent, et tous ses chemins sont donc préfixés par
+`exo2-portail-depot/`. Six travaux : analyse statique et unitaires
 backend, types et unitaires front, intégration, **Playwright dans son propre
 travail**, règles d'alerte, et construction des deux images. Les séparer donne le retour rapide
 tout de suite au lieu de le faire attendre derrière le plus lent. Sur une

@@ -125,7 +125,7 @@ readonly GRAFANA_ADMIN_PASSWORD_DEFAULT="courbe seuil mesure alerte tableau"
 # seule a avoir passe la chaine de verification, alors qu'une construction locale
 # ne prouve que ce que la machine avait sous la main ce jour-la. `latest` suit la
 # branche principale ; IMAGE_TAG="1.2.3" epingle une version publiee.
-readonly IMAGE_REPOSITORY_DEFAULT="ghcr.io/themlaw/exo2-portail-depot"
+readonly IMAGE_REPOSITORY_DEFAULT="ghcr.io/themlaw/exo-div-protocol"
 readonly IMAGE_TAG_DEFAULT="latest"
 
 if [[ -f "${ENVIRONMENT_FILE}" ]]; then

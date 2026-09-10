@@ -94,6 +94,27 @@ describe('Routes internes et d observabilite', () => {
     expect(with_wrong_secret.body).toEqual(without_secret.body);
   });
 
+  // La forme que Prometheus sait envoyer, et la seule qu'il puisse envoyer :
+  // sa configuration impose un schema sur l'en-tete Authorization.
+  it("[5] GET /metrics accepte le secret sous la forme `Bearer <secret>`", async () => {
+    const response = await request(app.getHttpServer())
+      .get(METRICS_PATH)
+      .set(INTERNAL_METRICS_SCRAPE_HEADER_NAME, `Bearer ${read_internal_shared_secret()}`);
+
+    expect(response.status).toBe(200);
+  });
+
+  it("[6] POST /internal/storage/events accepte lui aussi la forme porteuse", async () => {
+    const response = await request(app.getHttpServer())
+      .post(INTERNAL_STORAGE_EVENTS_PATH)
+      .set(
+        INTERNAL_STORAGE_WEBHOOK_HEADER_NAME,
+        `Bearer ${process.env[ENVIRONMENT_VARIABLE_NAMES.internal_storage_webhook_secret] ?? ''}`,
+      );
+
+    expect(response.status).not.toBe(401);
+  });
+
   it("[5] GET /metrics avec le bon secret rend l'exposition Prometheus du portail", async () => {
     const response = await scrape_metrics();
 

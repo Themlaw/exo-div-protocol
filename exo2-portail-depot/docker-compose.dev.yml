@@ -26,7 +26,7 @@ services:
       # L'API tourne sur l'HOTE en developpement, pas dans un conteneur `app` :
       # le nom de service de la production ne resout pas ici, et les
       # notifications resteraient indefiniment dans la file de MinIO.
-      MINIO_NOTIFY_WEBHOOK_ENDPOINT_portail: "http://host.docker.internal:${PORT:-3000}/api/v1/internal/storage/events"
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_portail: "http://host.docker.internal:${PORT:-3000}/internal/storage/events"
     extra_hosts:
       # Linux ne fournit pas `host.docker.internal` par defaut, contrairement a
       # Docker Desktop.

@@ -73,7 +73,11 @@ services:
       # auquel l'application abonne la quarantaine au demarrage. Sans elle, MinIO
       # refuserait l'abonnement et aucun scan ne partirait a l'arrivee d'un objet.
       MINIO_NOTIFY_WEBHOOK_ENABLE_portail: "on"
-      MINIO_NOTIFY_WEBHOOK_ENDPOINT_portail: "http://app:${PORT:-3000}/api/v1/internal/storage/events"
+      # HORS du prefixe versionne, et c'est voulu : les sondes et ce webhook sont
+      # des surfaces d'exploitation, pas l'API du produit. Un passage en v2
+      # casserait sinon la notification MinIO pour aucun benefice. Le chemin est
+      # celui de ROUTES_SERVED_OUTSIDE_THE_VERSIONED_API.
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_portail: "http://app:${PORT:-3000}/internal/storage/events"
       # Le meme secret que l'application attend en en-tete Authorization : MinIO
       # ne signe pas le corps de ses notifications, ce jeton est la seule preuve
       # que l'appel vient bien du stockage.
@@ -157,6 +161,82 @@ services:
       # conteneur ne regagne d'acces sortant par ce biais.
       - signatures
 
+  prometheus:
+    # Majeure courante, epinglee au correctif comme tout le reste.
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Trente jours : de quoi comparer un incident a la semaine precedente sans
+      # faire de ce conteneur un entrepot de donnees.
+      - --storage.tsdb.retention.time=30d
+      # PAS de --web.enable-lifecycle ni de --web.enable-admin-api : ils
+      # ouvrent l'arret du service et l'effacement des series a qui atteint le
+      # port. Rien ici n'a besoin de recharger a chaud.
+      - --web.listen-address=:9090
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      # Le secret de collecte n'est jamais dans un fichier versionne : install.sh
+      # l'ecrit a partir de l'environnement, avec les droits 0400.
+      - ./data/observability/secrets:/etc/prometheus/secrets:ro
+      - ./data/prometheus:/prometheus
+    networks:
+      # UNIQUEMENT le reseau d'observabilite. Le collecteur n'a aucune raison
+      # d'atteindre Postgres ni clamav, et le lui interdire supprime la question.
+      - observability
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      # Genere aleatoirement par install.sh, comme tous les autres secrets.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      # Aucune inscription, aucun acces anonyme : le tableau de bord dit le
+      # rythme des depots et celui des refus, ce n'est pas une page publique.
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Grafana genere ses liens absolus a partir de cette valeur : sans elle,
+      # une connexion derriere le proxy renvoie vers localhost.
+      GF_SERVER_ROOT_URL: ${PUBLIC_BASE_URL}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      # Le conteneur n'a aucun acces sortant (reseau interne) : lui demander
+      # d'aller chercher des mises a jour ou des greffons ne ferait qu'echouer
+      # bruyamment a chaque demarrage.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      # Grafana 12 pre-installe trois greffons depuis grafana.com au demarrage.
+      # Sans acces sortant, ce sont quatre erreurs a CHAQUE boot — et un
+      # conteneur qui crie tous les matins apprend a tout le monde a ne plus
+      # lire ses journaux.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./data/grafana:/var/lib/grafana
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    networks:
+      - observability
+      # Rejoint `proxied` pour que Traefik le serve en HTTPS. Une stack
+      # d'alerting qu'on ne peut pas montrer ne prouve rien — mais elle reste
+      # derriere l'authentification de Grafana, jamais anonyme.
+      - proxied
+
 volumes:
   clamav_signatures:
 
@@ -177,6 +257,12 @@ networks:
   signatures:
     driver: bridge
 
+  # Le collecteur, le tableau de bord, et les cibles qu'ils interrogent. Separe
+  # de `datastore` pour que l'observabilite ne devienne pas un chemin de plus
+  # vers la base : Prometheus n'a besoin que des deux processus du portail.
+  observability:
+    internal: true
+
   datastore:
     # `internal: true` coupe tout acces sortant vers Internet. Ni Postgres ni
     # MinIO n'ont de raison d'appeler l'exterieur ; leur en retirer le moyen
@@ -191,9 +277,13 @@ networks:
 
 # Topologie a l'arrivee des services restants :
 #
-#   traefik   -> edge + proxied                 (seul pont vers l'exterieur)
-#   app       -> proxied + datastore            (route par Traefik, parle a la base)
-#   worker    -> datastore                      (jamais expose, meme via Traefik)
-#   clamav    -> datastore + signatures          (joignable par le worker, sort pour freshclam)
-#   minio     -> proxied + datastore            (routable, car upload direct navigateur)
-#   postgres  -> datastore                      (joignable par rien d'autre)
+#   traefik    -> edge + proxied                 (seul pont vers l'exterieur)
+#   app        -> proxied + datastore + observability
+#   worker     -> datastore + observability      (jamais expose, meme via Traefik :
+#                                                 son port de metriques n'est joignable
+#                                                 que par le collecteur)
+#   clamav     -> datastore + signatures         (joignable par le worker, sort pour freshclam)
+#   minio      -> proxied + datastore            (routable, car upload direct navigateur)
+#   postgres   -> datastore                      (joignable par rien d'autre)
+#   prometheus -> observability                  (ne voit ni la base ni le scanner)
+#   grafana    -> observability + proxied        (route par Traefik, authentifie)

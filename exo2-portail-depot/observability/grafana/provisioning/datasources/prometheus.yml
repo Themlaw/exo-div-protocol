@@ -1,0 +1,15 @@
+# Provisionne au demarrage : personne n'a de navigateur a ouvrir apres
+# install.sh pour cliquer dans une interface.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Le nom de service Docker sur le reseau d'observabilite. Grafana n'atteint
+    # ni Postgres ni MinIO : il ne parle qu'au collecteur.
+    url: http://prometheus:9090
+    isDefault: true
+    # Grafana reecrit ses fichiers provisionnes au demarrage ; le systeme de
+    # fichiers est monte en lecture seule, donc on lui interdit d'essayer.
+    editable: false

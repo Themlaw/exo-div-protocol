@@ -5,7 +5,10 @@ import {
   INTERNAL_METRICS_SCRAPE_HEADER_NAME,
   METRICS_PATH,
 } from '../auth/auth_http_contract';
-import { matches_internal_shared_secret } from '../auth/internal_shared_secret';
+import {
+  matches_internal_shared_secret,
+  read_presented_shared_secret,
+} from '../auth/internal_shared_secret';
 import { APPLICATION_ENVIRONMENT } from '../config/configuration.module';
 import type { ApplicationEnvironment } from '../config/environment';
 import { METRICS_REGISTRY, type MetricsRegistry, type RenderedMetrics } from './metrics';
@@ -30,13 +33,14 @@ export class MetricsController {
     // connait — la version du format d'exposition en fait partie.
     @Res({ passthrough: true }) response: ServerResponse,
   ): Promise<string> {
-    const presented_secret: string | string[] | undefined =
-      request.headers[INTERNAL_METRICS_SCRAPE_HEADER_NAME];
+    const presented_secret: string | null = read_presented_shared_secret(
+      request.headers[INTERNAL_METRICS_SCRAPE_HEADER_NAME],
+    );
 
     // Meme refus, exactement, que le webhook de stockage : un 401 nu, sans
     // corps qui distinguerait « en-tete absent » de « secret faux ».
     if (
-      typeof presented_secret !== 'string' ||
+      presented_secret === null ||
       !matches_internal_shared_secret(
         presented_secret,
         this.environment.internal_storage_webhook_secret,

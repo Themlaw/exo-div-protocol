@@ -1,7 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { METRICS_PATH, INTERNAL_METRICS_SCRAPE_HEADER_NAME } from '../auth/auth_http_contract';
-import { matches_internal_shared_secret } from '../auth/internal_shared_secret';
+import {
+  matches_internal_shared_secret,
+  read_presented_shared_secret,
+} from '../auth/internal_shared_secret';
 import type { ApplicationLogger } from '../shared/logging/application_logger';
 import type { MetricsRegistry, RenderedMetrics } from './metrics';
 
@@ -79,13 +82,14 @@ async function serve_metrics_request(
     return;
   }
 
-  const presented_secret: string | string[] | undefined =
-    request.headers[INTERNAL_METRICS_SCRAPE_HEADER_NAME];
+  const presented_secret: string | null = read_presented_shared_secret(
+    request.headers[INTERNAL_METRICS_SCRAPE_HEADER_NAME],
+  );
 
   // Meme refus, exactement, que la route de l'API : un 401 nu, sans corps qui
   // distinguerait « en-tete absent » de « secret faux ».
   if (
-    typeof presented_secret !== 'string' ||
+    presented_secret === null ||
     !matches_internal_shared_secret(presented_secret, dependencies.shared_secret)
   ) {
     response.writeHead(401).end();

@@ -1,0 +1,123 @@
+# Regles d'alerte du portail.
+#
+# On alerte sur ce qui est CRITIQUE ET ACTIONNABLE, et on laisse le reste en
+# tableau de bord. Une regle qui interroge une serie qu'aucun chemin ne produit
+# ne se declenche jamais et donne l'illusion d'une couverture : toutes celles
+# qui suivent portent sur des series reellement exposees aujourd'hui.
+
+groups:
+  - name: portail_critique
+    rules:
+      # Le controle le plus bete et le plus utile. `for: 2m` laisse passer un
+      # redemarrage ordinaire ; au-dela, le service ne repond plus.
+      - alert: ServiceInjoignable
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critique
+        annotations:
+          summary: "{{ $labels.job }} ne repond plus a la collecte"
+          description: >-
+            La cible {{ $labels.instance }} du job {{ $labels.job }} est
+            injoignable depuis deux minutes.
+
+      # LA panne ou toutes les sondes d'infra sont vertes et ou le produit ne
+      # marche plus : les pieces arrivent, rien n'est publie, aucune erreur
+      # nulle part. Sans cette regle, personne ne s'en apercoit — ni le client,
+      # qui a bien vu son depot partir, ni l'avocat, qui attend.
+      #
+      # Quinze minutes : un scan dure quelques secondes, et la reconciliation
+      # repasse toutes les quinze minutes. Au-dela, ce n'est plus un retard.
+      - alert: FileDeScanFigee
+        expr: portail_scan_queue_oldest_pending_job_age_seconds > 900
+        for: 10m
+        labels:
+          severity: critique
+        annotations:
+          summary: "Un depot attend son scan depuis plus de quinze minutes"
+          description: >-
+            Le plus vieux travail en attente a
+            {{ $value | humanizeDuration }}. Verifier clamd, puis le travailleur.
+
+      # Le scanner en fail closed : une panne rend `scanner_unavailable`, jamais
+      # `clean`. C'est le bon comportement, et c'est exactement pour cela qu'il
+      # faut alerter — rien ne sera publie tant que clamd ne repond pas, et
+      # aucune erreur ne remontera au client.
+      - alert: ScannerAntiviralInjoignable
+        expr: portail_clamav_up == 0
+        for: 5m
+        labels:
+          severity: critique
+        annotations:
+          summary: "clamd ne repond plus a la sonde"
+          description: >-
+            Aucune piece ne peut plus etre publiee. clamd reclame environ 1,5 Go
+            pour demarrer : verifier d'abord qu'il n'a pas ete tue par le noyau.
+
+  - name: portail_avertissements
+    rules:
+      # Le travailleur tourne mais ne sait plus lire sa propre file : la serie
+      # disparait plutot que de mentir avec sa derniere valeur. `absent()` est
+      # donc la condition, et elle designe une base injoignable depuis lui.
+      - alert: EtatDeFileIllisible
+        expr: absent(portail_scan_queue_depth)
+        for: 10m
+        labels:
+          severity: avertissement
+        annotations:
+          summary: "Le travailleur n'expose plus l'etat de sa file"
+          description: >-
+            Les series de file ont disparu de l'exposition : la lecture en base
+            echoue, alors que le processus repond toujours.
+
+      # Un travail a bout d'essais ne sera plus rejoue par personne : la piece
+      # reste en quarantaine indefiniment. Ce n'est pas urgent — rien n'est
+      # publie a tort — mais cela ne se repare pas tout seul.
+      - alert: TravauxDeScanAbandonnes
+        expr: portail_scan_queue_depth{state="failed"} > 0
+        for: 15m
+        labels:
+          severity: avertissement
+        annotations:
+          summary: "{{ $value }} travail(aux) de scan ont epuise leurs essais"
+
+      # Un balayage de jetons se lit dans une PENTE, jamais dans une ligne de
+      # journal. Le jeton fait 190 bits : ce n'est pas l'enumeration qui inquiete
+      # mais ce qu'elle revele — quelqu'un cherche.
+      - alert: BalayageDeJetonsDeLien
+        expr: increase(portail_unknown_access_link_attempts_total[5m]) > 20
+        for: 5m
+        labels:
+          severity: avertissement
+        annotations:
+          summary: "Tentatives repetees sur des jetons de lien inexistants"
+
+      # La limitation fonctionne — c'est justement pour cela qu'on la mesure :
+      # une defense qui tient sans se voir ne permet a personne de constater
+      # qu'on est attaque.
+      - alert: PicDeRefusDeCadence
+        expr: sum by (surface) (rate(portail_rate_limited_requests_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: avertissement
+        annotations:
+          summary: "Refus de cadence soutenus sur {{ $labels.surface }}"
+
+      # Le signal PRODUIT le plus parlant du portail : des dossiers ouverts que
+      # personne n'a jamais touches. Il ne dit pas qu'une machine est en panne,
+      # il dit que le lien n'arrive pas, ou qu'il n'est pas compris.
+      - alert: DossiersAbandonnesSansDepot
+        expr: increase(portail_activity_events_total{type="deposit_request_expired"}[24h]) > 3
+        labels:
+          severity: avertissement
+        annotations:
+          summary: "Plusieurs demandes ont expire sans qu'aucune piece n'arrive"
+
+      # Justifie a lui seul toute la chaine de quarantaine. Rare, et on veut le
+      # savoir a chaque fois.
+      - alert: PieceInfectee
+        expr: increase(portail_activity_events_total{type="deposited_file_infected"}[1h]) > 0
+        labels:
+          severity: avertissement
+        annotations:
+          summary: "Une piece deposee portait une signature connue"

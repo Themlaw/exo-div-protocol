@@ -1,0 +1,79 @@
+# Configuration de collecte du portail.
+#
+# Deux cibles, et deux seulement : l'API et le travailleur. Elles exposent des
+# series DIFFERENTES — le travailleur seul porte les jauges de la file de scan,
+# parce qu'il la possede — et des compteurs metier chacune de son cote, que
+# Prometheus somme par `job`.
+#
+# Le secret de collecte n'est PAS ecrit ici. `credentials_file` designe un
+# fichier que install.sh ecrit a partir de l'environnement : un secret dans un
+# fichier de configuration versionne serait un secret publie.
+
+global:
+  # Quinze secondes : la mesure qui porte l'alerte la plus fine est l'age du
+  # plus vieux travail de scan, et son seuil se compte en minutes. Collecter
+  # plus souvent ne rendrait rien de plus.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    portail: depot
+
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+alerting:
+  alertmanagers:
+    # Alertmanager arrive a l'etape 10, avec le reste de la chaine de
+    # deploiement. Les regles s'evaluent des maintenant : elles sont visibles
+    # dans Grafana et dans l'interface de Prometheus, ce qui suffit a montrer
+    # qu'elles se declenchent sur les bonnes conditions.
+    - static_configs:
+        - targets: []
+
+scrape_configs:
+  # L'API. `/metrics` y est servie hors du prefixe versionne, derriere l'acces
+  # `internal` : le collecteur l'atteint par le reseau interne, elle n'est
+  # jamais routee par Traefik.
+  - job_name: portail_api
+    scheme: http
+    metrics_path: /metrics
+    authorization:
+      # Prometheus ne peut pas envoyer un en-tete Authorization brut : il impose
+      # un schema. L'application accepte donc les deux formes, et MinIO — le
+      # seul emetteur qu'on ne puisse pas configurer — garde la sienne.
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/internal_shared_secret
+    static_configs:
+      - targets: ['app:3000']
+
+  # Le travailleur. Il ne sert aucune requete metier : ce port n'existe que pour
+  # cette collecte, et il n'est publie sur aucun reseau autre qu'interne.
+  - job_name: portail_worker
+    scheme: http
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/internal_shared_secret
+    static_configs:
+      - targets: ['worker:9101']
+
+  # Prometheus se collecte lui-meme : sans cela, `up == 0` ne dirait rien du
+  # collecteur, et une chaine d'alerte aveugle sur elle-meme n'alerte de rien.
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+# A CABLER A L'ETAPE 10 — et pourquoi ce n'est pas fait ici :
+#
+# MinIO expose ses propres metriques sur /minio/v2/metrics/*, d'ou viendraient
+# l'espace disque du volume et les echecs cote stockage. Les ouvrir demande soit
+# MINIO_PROMETHEUS_AUTH_TYPE=public, soit un jeton signe des identifiants root.
+#
+# `public` est ECARTE : MinIO est joignable par Traefik — le navigateur y poste
+# les octets en direct — donc une exposition sans authentification ne resterait
+# pas confinee au reseau d'observabilite. Ce sera le jeton signe.
+#
+# Manquent aussi, pour la meme etape : la sonde blackbox sur l'URL HTTPS
+# publique (le seul controle reellement de bout en bout, qui traverse Traefik et
+# le certificat) et l'exportateur Postgres pour l'epuisement du pool de
+# connexions, partage entre l'API et le travailleur.

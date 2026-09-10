@@ -84,6 +84,12 @@ describe('Ecoute de metriques du travailleur', () => {
     expect(with_wrong_secret.body).toBe(without_secret.body);
   });
 
+  it('accepte le secret sous la forme `Bearer <secret>`, celle de Prometheus', async () => {
+    const response = await call('/metrics', { secret: `Bearer ${SHARED_SECRET}` });
+
+    expect(response.status).toBe(200);
+  });
+
   it("rend l'exposition du travailleur au collecteur muni du secret", async () => {
     const response = await call('/metrics', { secret: SHARED_SECRET });
 

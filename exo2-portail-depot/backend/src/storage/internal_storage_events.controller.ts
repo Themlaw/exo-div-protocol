@@ -15,7 +15,10 @@ import {
 } from '../auth/auth_http_contract';
 import { APPLICATION_ENVIRONMENT } from '../config/configuration.module';
 import type { ApplicationEnvironment } from '../config/environment';
-import { matches_internal_shared_secret } from '../auth/internal_shared_secret';
+import {
+  matches_internal_shared_secret,
+  read_presented_shared_secret,
+} from '../auth/internal_shared_secret';
 import {
   OBJECT_ARRIVAL_RECORDER,
   type ObjectArrivalRecorder,
@@ -45,11 +48,12 @@ export class InternalStorageEventsController {
     @Req() request: IncomingMessage,
     @Body() body: unknown,
   ): Promise<{ status: string }> {
-    const presented_secret: string | string[] | undefined =
-      request.headers[INTERNAL_STORAGE_WEBHOOK_HEADER_NAME];
+    const presented_secret: string | null = read_presented_shared_secret(
+      request.headers[INTERNAL_STORAGE_WEBHOOK_HEADER_NAME],
+    );
 
     if (
-      typeof presented_secret !== 'string' ||
+      presented_secret === null ||
       !matches_internal_shared_secret(
         presented_secret,
         this.environment.internal_storage_webhook_secret,

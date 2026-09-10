@@ -26,14 +26,16 @@ export const ENVIRONMENT_VARIABLE_NAMES = {
   trusted_proxy_hop_count: 'TRUSTED_PROXY_HOP_COUNT',
   public_base_url: 'PUBLIC_BASE_URL',
   http_port: 'PORT',
+  worker_metrics_port: 'WORKER_METRICS_PORT',
   lawyer_auth_secret: 'BETTER_AUTH_SECRET',
 } as const satisfies Record<keyof ApplicationEnvironment, string>;
 
-// Seule variable a porter une valeur par defaut, donc la seule a ne pas etre
-// requise : le port d'ecoute est un detail de deploiement, pas un secret ni une
-// decision de securite. Tout le reste doit etre fourni explicitement.
+// Les seules variables a porter une valeur par defaut, donc les seules a ne pas
+// etre requises : un port d'ecoute est un detail de deploiement, pas un secret
+// ni une decision de securite. Tout le reste doit etre fourni explicitement.
 export const OPTIONAL_ENVIRONMENT_VARIABLES: readonly string[] = [
   ENVIRONMENT_VARIABLE_NAMES.http_port,
+  ENVIRONMENT_VARIABLE_NAMES.worker_metrics_port,
 ];
 
 export const REQUIRED_ENVIRONMENT_VARIABLES: readonly string[] = Object.values(
@@ -79,9 +81,12 @@ export interface ApplicationEnvironment {
   // session valide. Le nom est celui que la bibliotheque lit dans
   // l'environnement, pour qu'une valeur posee la ne puisse pas diverger.
   lawyer_auth_secret: string;
-  // Port d'ecoute HTTP. `PORT` est le nom que tout l'ecosysteme attend, et il
-  // reste le seul reglage a valeur par defaut.
+  // Port d'ecoute HTTP. `PORT` est le nom que tout l'ecosysteme attend.
   http_port: number;
+  // Port sur lequel le travailleur expose ses metriques. Il ne sert aucune
+  // requete metier : ce port n'est publie que sur le reseau interne, et le
+  // collecteur est le seul a l'atteindre.
+  worker_metrics_port: number;
 }
 
 export type EnvironmentViolationReason =
@@ -378,6 +383,10 @@ function extract_url_password(value: string): string | null {
 
 export const DEFAULT_HTTP_PORT = 3000;
 
+// 9100 et suivants sont la plage conventionnelle des exportateurs Prometheus :
+// un operateur qui voit ce port sait ce qu'il regarde sans ouvrir un fichier.
+export const DEFAULT_WORKER_METRICS_PORT = 9101;
+
 // Bornes volontairement etroites. En bas : les ports inferieurs a 1024 sont
 // privilegies, et le conteneur tourne en uid 1000 — le liage echouerait sur un
 // EACCES obscur au demarrage plutot que sur un message de configuration. En
@@ -385,6 +394,34 @@ export const DEFAULT_HTTP_PORT = 3000;
 // systeme, ce qui n'a de sens que pour un test, jamais pour un service qu'un
 // proxy doit joindre a une adresse connue.
 export const HTTP_PORT_BOUNDS = { min: 1024, max: 65_535 } as const;
+
+// Lue sans `required_value` : une absence est un choix legitime, pas une
+// violation. Une valeur presente, en revanche, est verifiee comme les autres —
+// et une valeur illisible est refusee plutot que silencieusement corrigee, sans
+// quoi le service ecouterait sur un port choisi par hasard.
+function read_optional_port(
+  raw_environment: Readonly<Record<string, string | undefined>>,
+  variable: string,
+  default_port: number,
+  violations: EnvironmentViolation[],
+): number {
+  const raw_port: string | undefined = raw_environment[variable];
+  if (raw_port === undefined || raw_port === '') {
+    return default_port;
+  }
+
+  const parsed_port: number | null = parse_non_negative_integer(raw_port);
+  if (
+    parsed_port === null ||
+    parsed_port < HTTP_PORT_BOUNDS.min ||
+    parsed_port > HTTP_PORT_BOUNDS.max
+  ) {
+    violations.push({ variable, reason: 'malformed' });
+    return default_port;
+  }
+
+  return parsed_port;
+}
 
 const ACCEPTED_PUBLIC_BASE_URL_PROTOCOLS: readonly string[] = ['http:', 'https:'];
 
@@ -473,23 +510,28 @@ export function parse_application_environment(
 
   // Lu sans `required_value` : une absence est un choix legitime, pas une
   // violation. Une valeur presente, en revanche, est verifiee comme les autres.
-  const http_port_raw: string | undefined =
-    raw_environment[ENVIRONMENT_VARIABLE_NAMES.http_port];
-  let http_port: number = DEFAULT_HTTP_PORT;
-  if (http_port_raw !== undefined && http_port_raw !== '') {
-    const parsed_http_port: number | null = parse_non_negative_integer(http_port_raw);
-    if (
-      parsed_http_port === null ||
-      parsed_http_port < HTTP_PORT_BOUNDS.min ||
-      parsed_http_port > HTTP_PORT_BOUNDS.max
-    ) {
-      violations.push({
-        variable: ENVIRONMENT_VARIABLE_NAMES.http_port,
-        reason: 'malformed',
-      });
-    } else {
-      http_port = parsed_http_port;
-    }
+  const http_port: number = read_optional_port(
+    raw_environment,
+    ENVIRONMENT_VARIABLE_NAMES.http_port,
+    DEFAULT_HTTP_PORT,
+    violations,
+  );
+
+  const worker_metrics_port: number = read_optional_port(
+    raw_environment,
+    ENVIRONMENT_VARIABLE_NAMES.worker_metrics_port,
+    DEFAULT_WORKER_METRICS_PORT,
+    violations,
+  );
+
+  // Deux processus sur la meme machine : un travailleur qui ecouterait sur le
+  // port de l'API ne demarrerait pas, et l'erreur serait un EADDRINUSE sans
+  // rapport apparent avec la configuration.
+  if (worker_metrics_port === http_port) {
+    violations.push({
+      variable: ENVIRONMENT_VARIABLE_NAMES.worker_metrics_port,
+      reason: 'malformed',
+    });
   }
 
   let trusted_proxy_hop_count: number | undefined;
@@ -742,6 +784,7 @@ export function parse_application_environment(
       public_base_url,
     ),
     http_port,
+    worker_metrics_port,
     lawyer_auth_secret: resolved(
       ENVIRONMENT_VARIABLE_NAMES.lawyer_auth_secret,
       lawyer_auth_secret,

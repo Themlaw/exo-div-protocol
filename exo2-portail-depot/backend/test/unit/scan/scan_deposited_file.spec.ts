@@ -5,7 +5,7 @@ import {
   QUARANTINE_BUCKET_NAME,
   VERIFIED_BUCKET_NAME,
 } from '../../../src/object_storage/object_storage';
-import type { FileScanner } from '../../../src/scan/clamav_scanner';
+import type { FileScanner, ScannerAvailability } from '../../../src/scan/clamav_scanner';
 import {
   DepositedFileScanService,
   SCAN_LOG_CONTEXT,
@@ -16,6 +16,7 @@ import { build_capturing_logger, type CapturingLogger } from '../../helpers/capt
 import { FakeActivityEventRepository } from '../../helpers/fake_activity_event_repository';
 import { FakeDepositedFileRepository } from '../../helpers/fake_deposited_file_repository';
 import { FakeExpectedDocumentRepository } from '../../helpers/fake_expected_document_repository';
+import { FakeDepositRequestLifecycle } from '../../helpers/fake_deposit_request_lifecycle';
 import { FakeObjectStorage } from '../../helpers/fake_object_storage';
 import {
   REFERENCE_NOW,
@@ -40,6 +41,12 @@ class FixedVerdictFileScanner implements FileScanner {
     content.destroy();
     return this.verdict;
   }
+
+  // Un scanner qui rend un verdict est joignable : la sonde n'a pas d'autre
+  // sens ici, et ces tests ne parlent que de verdicts.
+  async probe_availability(): Promise<ScannerAvailability> {
+    return this.verdict === 'scanner_unavailable' ? 'unavailable' : 'available';
+  }
 }
 
 class WriteCountingDepositedFileRepository extends FakeDepositedFileRepository {
@@ -56,6 +63,7 @@ interface ScanTestContext {
   deposited_files: WriteCountingDepositedFileRepository;
   expected_documents: FakeExpectedDocumentRepository;
   activity_events: FakeActivityEventRepository;
+  deposit_request_lifecycle: FakeDepositRequestLifecycle;
   object_storage: FakeObjectStorage;
   file_scanner: FixedVerdictFileScanner;
   logger: CapturingLogger;
@@ -67,6 +75,7 @@ function build_scan_test_context(
 ): ScanTestContext {
   const expected_documents = new FakeExpectedDocumentRepository();
   const activity_events = new FakeActivityEventRepository();
+  const deposit_request_lifecycle = new FakeDepositRequestLifecycle();
   const object_storage = new FakeObjectStorage();
   const file_scanner = new FixedVerdictFileScanner(verdict);
   const logger: CapturingLogger = build_capturing_logger();
@@ -77,6 +86,7 @@ function build_scan_test_context(
       deposited_files,
       expected_documents,
       activity_events,
+      deposit_request_lifecycle,
       object_storage,
       file_scanner,
       clock,
@@ -85,6 +95,7 @@ function build_scan_test_context(
     deposited_files,
     expected_documents,
     activity_events,
+    deposit_request_lifecycle,
     object_storage,
     file_scanner,
     logger,
@@ -353,6 +364,57 @@ describe('DepositedFileScanService', () => {
 
       expect(outcome).toEqual({ kind: 'nothing_to_scan' });
       expect(context.activity_events.recorded_types()).toEqual([]);
+    },
+  );
+
+  // Le scan annonce un FAIT — cette piece est saine — et rien de plus : c'est le
+  // cycle de vie qui sait ce que « le dossier est complet » veut dire.
+  it('signale au cycle de vie la piece devenue saine, avec la demande qu elle sert', async () => {
+    const context: ScanTestContext = build_scan_test_context('clean');
+    const file: DepositedFile = build_deposited_file({ detected_mime_type: null });
+    seed_quarantined_file(context, file, PDF_CONTENT);
+    const expected_document = build_expected_document({ deposit_request_id: 'request-42' });
+    context.expected_documents.seed(expected_document);
+
+    await context.service.scan(file.id);
+
+    expect(context.deposit_request_lifecycle.clean_notices).toEqual(['request-42']);
+    expect(context.deposit_request_lifecycle.applied_events).toEqual([]);
+  });
+
+  // La completude est REVOCABLE : un verdict qui se degrade doit rouvrir la
+  // demande, sinon une piece infectee ou refusee resterait acquise.
+  it.each([
+    ['infecte', 'infected' as const, PDF_CONTENT],
+    ['refuse', 'clean' as const, UNRECOGNIZED_CONTENT],
+  ])('signale la perte de completude sur un verdict %s', async (_label, verdict, content) => {
+    const context: ScanTestContext = build_scan_test_context(verdict);
+    const file: DepositedFile = build_deposited_file({ detected_mime_type: null });
+    seed_quarantined_file(context, file, content);
+    context.expected_documents.seed(build_expected_document({ deposit_request_id: 'request-42' }));
+
+    await context.service.scan(file.id);
+
+    expect(context.deposit_request_lifecycle.recorded_pipeline_events).toEqual([
+      { deposit_request_id: 'request-42', event: 'expected_document_became_not_clean' },
+    ]);
+    expect(context.deposit_request_lifecycle.clean_notices).toEqual([]);
+  });
+
+  // L'emplacement disparu veut dire la demande disparue — la cascade est la
+  // seule facon d'effacer un document attendu. Le cycle de vie n'aurait plus
+  // rien a faire evoluer.
+  it.each(['clean', 'infected'] as const)(
+    'ne signale rien quand l emplacement de la piece a disparu (%s)',
+    async (verdict) => {
+      const context: ScanTestContext = build_scan_test_context(verdict);
+      const file: DepositedFile = build_deposited_file({ detected_mime_type: null });
+      seed_quarantined_file(context, file, PDF_CONTENT);
+
+      await context.service.scan(file.id);
+
+      expect(context.deposit_request_lifecycle.recorded_pipeline_events).toEqual([]);
+      expect(context.deposit_request_lifecycle.clean_notices).toEqual([]);
     },
   );
 });

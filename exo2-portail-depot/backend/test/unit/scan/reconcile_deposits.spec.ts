@@ -16,6 +16,8 @@ import { CLIENT_IP_RETENTION_DAYS } from '../../../src/domain/activity_event';
 import { FakeActivityEventRepository } from '../../helpers/fake_activity_event_repository';
 import { FakeDepositedFileRepository } from '../../helpers/fake_deposited_file_repository';
 import { FakeExpectedDocumentRepository } from '../../helpers/fake_expected_document_repository';
+import { FakeDepositRequestRepository } from '../../helpers/fake_deposit_request_repository';
+import { FakeDepositRequestLifecycle } from '../../helpers/fake_deposit_request_lifecycle';
 import { FakeObjectStorage } from '../../helpers/fake_object_storage';
 import { build_capturing_logger, type CapturingLogger } from '../../helpers/capturing_logger';
 import {
@@ -35,6 +37,8 @@ class RecordingScanQueue implements ScanQueue {
 
 interface ReconciliationHarness {
   activity_events: FakeActivityEventRepository;
+  deposit_requests: FakeDepositRequestRepository;
+  deposit_request_lifecycle: FakeDepositRequestLifecycle;
   deposited_files: FakeDepositedFileRepository;
   object_storage: FakeObjectStorage;
   scan_queue: RecordingScanQueue;
@@ -49,6 +53,8 @@ function build_reconciliation_harness(now: Date = REFERENCE_NOW): Reconciliation
   const deposited_files = new FakeDepositedFileRepository();
   const expected_documents = new FakeExpectedDocumentRepository();
   const activity_events = new FakeActivityEventRepository();
+  const deposit_requests = new FakeDepositRequestRepository();
+  const deposit_request_lifecycle = new FakeDepositRequestLifecycle();
   const object_storage = new FakeObjectStorage();
   const scan_queue = new RecordingScanQueue();
   const logger: CapturingLogger = build_capturing_logger();
@@ -73,6 +79,8 @@ function build_reconciliation_harness(now: Date = REFERENCE_NOW): Reconciliation
     object_storage,
     object_arrivals,
     activity_events,
+    deposit_requests,
+    deposit_request_lifecycle,
     scan_queue,
     clock,
     logger,
@@ -80,6 +88,8 @@ function build_reconciliation_harness(now: Date = REFERENCE_NOW): Reconciliation
 
   return {
     activity_events,
+    deposit_requests,
+    deposit_request_lifecycle,
     deposited_files,
     object_storage,
     scan_queue,
@@ -328,6 +338,7 @@ describe('reconciliation des depots', () => {
       abandoned_reservations_discarded: 1,
       overdue_scans_requeued: 1,
       orphan_objects_collected: 1,
+      expired_deposit_requests_closed: 0,
       client_ips_redacted: 0,
     });
     expect(second_pass).toEqual({
@@ -338,6 +349,7 @@ describe('reconciliation des depots', () => {
       // d'unicite de la file qui empeche le doublon, pas le balayage.
       overdue_scans_requeued: 1,
       orphan_objects_collected: 0,
+      expired_deposit_requests_closed: 0,
       client_ips_redacted: 0,
     });
   });
@@ -396,9 +408,39 @@ describe('reconciliation des depots', () => {
           abandoned_reservations_discarded: 0,
           overdue_scans_requeued: 0,
           orphan_objects_collected: 0,
+          expired_deposit_requests_closed: 0,
           client_ips_redacted: 0,
         },
       }),
     );
+  });
+
+  // Personne ne POUSSE le temps : une demande abandonnee n'a plus personne pour
+  // venir constater que son lien a expire. C'est ce balayage-la qui la fait
+  // passer sous les yeux de l'avocat en « expiree sans depot ».
+  describe('demandes expirees', () => {
+    it('signale l expiration de chaque demande dont le lien est echu et les compte', async () => {
+      const harness: ReconciliationHarness = build_reconciliation_harness();
+      harness.deposit_requests.seed_expired('request-1', add_minutes(REFERENCE_NOW, -1));
+      harness.deposit_requests.seed_expired('request-2', add_minutes(REFERENCE_NOW, -60));
+
+      const report: ReconciliationReport = await harness.reconcile();
+
+      expect(report.expired_deposit_requests_closed).toBe(2);
+      expect(harness.deposit_request_lifecycle.recorded_pipeline_events).toEqual([
+        { deposit_request_id: 'request-1', event: 'access_link_expired' },
+        { deposit_request_id: 'request-2', event: 'access_link_expired' },
+      ]);
+    });
+
+    it('ne signale rien et compte zero quand aucun lien n a encore expire', async () => {
+      const harness: ReconciliationHarness = build_reconciliation_harness();
+      harness.deposit_requests.seed_expired('request-1', add_minutes(REFERENCE_NOW, 60));
+
+      const report: ReconciliationReport = await harness.reconcile();
+
+      expect(report.expired_deposit_requests_closed).toBe(0);
+      expect(harness.deposit_request_lifecycle.applied_events).toEqual([]);
+    });
   });
 });

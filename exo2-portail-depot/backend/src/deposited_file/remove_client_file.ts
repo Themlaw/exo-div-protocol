@@ -12,6 +12,7 @@ import type {
 } from '../deposit/deposit_request_repository';
 import type { DepositedFileRepository } from './deposited_file_repository';
 import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import type { DepositRequestLifecycle } from '../deposit/deposit_request_lifecycle';
 import { build_activity_event } from '../domain/activity_event';
 import type { Clock } from '../shared/clock';
 
@@ -33,6 +34,7 @@ export interface ClientFileRemovalDependencies {
   deposited_files: DepositedFileRepository;
   object_storage: ObjectStorage;
   activity_events: ActivityEventRepository;
+  deposit_request_lifecycle: DepositRequestLifecycle;
   clock: Clock;
 }
 
@@ -86,6 +88,17 @@ export class ClientFileRemovalService implements ClientFileRemover {
         occurred_at: this.dependencies.clock.now(),
       }),
     );
+
+    // Seulement si la piece etait SAINE : elle occupait alors un emplacement au
+    // titre de la completude, et son depart rouvre la demande. Retirer une piece
+    // infectee ou refusee ne retire rien qui comptait, et le signaler ferait
+    // repasser en `incomplete` une demande que rien n'a degradee.
+    if (file.status === 'clean') {
+      await this.dependencies.deposit_request_lifecycle.apply_pipeline_event({
+        deposit_request_id: input.access_link.deposit_request_id,
+        event: 'expected_document_became_not_clean',
+      });
+    }
 
     if (plan.must_delete_stored_object) {
       await this.delete_stored_object_wherever_it_lives(file.object_key);

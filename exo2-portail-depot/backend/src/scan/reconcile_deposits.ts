@@ -14,6 +14,8 @@ import type { ApplicationLogger } from '../shared/logging/application_logger';
 import type { ObjectArrivalRecorder } from './record_object_arrival';
 import type { ScanQueue } from './scan_queue';
 import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import type { DepositRequestRepository } from '../deposit/deposit_request_repository';
+import type { DepositRequestLifecycle } from '../deposit/deposit_request_lifecycle';
 import { CLIENT_IP_RETENTION_DAYS } from '../domain/activity_event';
 
 export const DEPOSIT_RECONCILER: unique symbol = Symbol('DEPOSIT_RECONCILER');
@@ -35,6 +37,7 @@ export interface ReconciliationReport {
   abandoned_reservations_discarded: number;
   overdue_scans_requeued: number;
   orphan_objects_collected: number;
+  expired_deposit_requests_closed: number;
   client_ips_redacted: number;
 }
 
@@ -47,6 +50,8 @@ export interface DepositReconciliationDependencies {
   object_storage: ObjectStorage;
   object_arrivals: ObjectArrivalRecorder;
   activity_events: ActivityEventRepository;
+  deposit_requests: DepositRequestRepository;
+  deposit_request_lifecycle: DepositRequestLifecycle;
   scan_queue: ScanQueue;
   clock: Clock;
   logger: ApplicationLogger;
@@ -72,12 +77,14 @@ export class DepositReconciliationService implements DepositReconciler {
     const arrivals = await this.recover_missed_arrivals();
     const overdue_scans_requeued: number = await this.requeue_overdue_scans();
     const orphan_objects_collected: number = await this.collect_stale_quarantine_objects();
+    const expired_deposit_requests_closed: number = await this.close_expired_deposit_requests();
     const client_ips_redacted: number = await this.redact_expired_client_ips();
 
     const report: ReconciliationReport = {
       ...arrivals,
       overdue_scans_requeued,
       orphan_objects_collected,
+      expired_deposit_requests_closed,
       client_ips_redacted,
     };
 
@@ -89,6 +96,26 @@ export class DepositReconciliationService implements DepositReconciler {
     });
 
     return report;
+  }
+
+  // Personne ne POUSSE le temps : un lien expire sans que rien ne se produise.
+  // Le client qui frappe a la porte nous l'apprend tout de suite, mais une
+  // demande abandonnee n'a plus personne pour le faire — et c'est justement
+  // celle-la que l'avocat doit voir passer en « expiree sans depot ».
+  private async close_expired_deposit_requests(): Promise<number> {
+    const abandoned_request_ids: readonly string[] =
+      await this.dependencies.deposit_requests.list_incomplete_with_expired_link(
+        this.dependencies.clock.now(),
+      );
+
+    for (const deposit_request_id of abandoned_request_ids) {
+      await this.dependencies.deposit_request_lifecycle.apply_pipeline_event({
+        deposit_request_id,
+        event: 'access_link_expired',
+      });
+    }
+
+    return abandoned_request_ids.length;
   }
 
   // La retention des adresses est un travail de fond de plus, et il n'a rien a

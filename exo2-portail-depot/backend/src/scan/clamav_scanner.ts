@@ -5,8 +5,16 @@ import type { ScanVerdict } from '../domain/deposited_file';
 
 export const FILE_SCANNER: unique symbol = Symbol('FILE_SCANNER');
 
+export type ScannerAvailability = 'available' | 'unavailable';
+
 export interface FileScanner {
   scan_stream(content: Readable): Promise<ScanVerdict>;
+
+  // Existe pour la metrique `portail_clamav_up`, et passe par la MEME connexion
+  // qu'un scan : si le PING repond, le scan repondra. Une sonde qui
+  // interrogerait autre chose que le chemin reel finirait par etre verte
+  // pendant une panne.
+  probe_availability(): Promise<ScannerAvailability>;
 }
 
 export interface ClamavConnectionSettings {
@@ -81,6 +89,24 @@ export class ClamavFileScanner implements FileScanner {
     } finally {
       socket?.destroy();
       content.destroy();
+    }
+  }
+
+  // La commande PING de clamd, qui repond PONG. Le delai est celui du scan :
+  // une sonde plus patiente que le travail qu'elle couvre dirait vert alors que
+  // chaque scan expire deja.
+  async probe_availability(): Promise<ScannerAvailability> {
+    let socket: Socket | undefined;
+
+    try {
+      socket = await this.open_connection();
+      socket.write('zPING\0');
+
+      return (await read_response(socket)).includes('PONG') ? 'available' : 'unavailable';
+    } catch {
+      return 'unavailable';
+    } finally {
+      socket?.destroy();
     }
   }
 

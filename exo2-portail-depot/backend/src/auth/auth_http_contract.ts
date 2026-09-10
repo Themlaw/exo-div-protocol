@@ -21,7 +21,9 @@ export const ROUTES_SERVED_OUTSIDE_THE_VERSIONED_API: readonly string[] = [
   HEALTH_PATH,
   READINESS_PATH,
   INTERNAL_STORAGE_EVENTS_PATH,
+  METRICS_PATH,
 ];
+
 
 // Le chemin qu'une route du routeur Nest sert REELLEMENT, prefixe compris. Le
 // recensement d'acces et le harnais de test s'en servent : un inventaire qui
@@ -57,3 +59,9 @@ export const LAWYER_SESSION_COOKIE_PATH = '/api';
 // schema `Bearer` (c'est le comportement de MINIO_NOTIFY_WEBHOOK_AUTH_TOKEN).
 // On s'aligne sur l'emetteur : c'est lui qu'on ne peut pas configurer autrement.
 export const INTERNAL_STORAGE_WEBHOOK_HEADER_NAME = 'authorization';
+
+// Le collecteur de metriques presente le MEME secret, dans le meme en-tete.
+// Deux consommateurs derriere un secret unique est un compromis assume et note
+// pour l'etape 10 : le jour ou Prometheus est reellement cable, lui donner son
+// propre secret ne coutera qu'une variable d'environnement de plus.
+export const INTERNAL_METRICS_SCRAPE_HEADER_NAME = INTERNAL_STORAGE_WEBHOOK_HEADER_NAME;

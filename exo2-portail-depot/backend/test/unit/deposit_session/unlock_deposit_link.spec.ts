@@ -1,4 +1,5 @@
 import { FakeActivityEventRepository } from '../../helpers/fake_activity_event_repository';
+import { FakeDepositRequestLifecycle } from '../../helpers/fake_deposit_request_lifecycle';
 import { build_capturing_logger, type CapturingLogger } from '../../helpers/capturing_logger';
 import {
   CLIENT_DEPOSIT_SESSION_LIFETIME_SECONDS,
@@ -19,6 +20,7 @@ import type { PinHasher } from '../../../src/domain/verify_client_pin';
 import type { DepositSession } from '../../../src/domain/deposit_session';
 import type { NewActivityEvent } from '../../../src/domain/activity_event';
 import { build_access_link, REFERENCE_NOW } from '../../fixtures/domain_builders';
+import { RecordingMetricsRegistry } from '../../helpers/recording_metrics_registry';
 
 const CLIENT_IP = '203.0.113.7';
 
@@ -29,6 +31,8 @@ interface UnlockHarness {
   saved_attempt_count: () => number;
   opened_session_count: () => number;
   activity_events: FakeActivityEventRepository;
+  deposit_request_lifecycle: FakeDepositRequestLifecycle;
+  metrics: RecordingMetricsRegistry;
   logger: CapturingLogger;
 }
 
@@ -43,6 +47,7 @@ function build_unlock_harness(options: {
   let saved_attempt_count = 0;
   let opened_session_count = 0;
   const activity_events = new FakeActivityEventRepository();
+  const deposit_request_lifecycle = new FakeDepositRequestLifecycle();
   const logger: CapturingLogger = build_capturing_logger();
 
   const pin_hasher: PinHasher = {
@@ -86,6 +91,8 @@ function build_unlock_harness(options: {
     },
   };
 
+  const metrics = new RecordingMetricsRegistry();
+
   return {
     service: new DepositLinkUnlockService({
       access_links,
@@ -101,6 +108,8 @@ function build_unlock_harness(options: {
       throttle_store,
       clock: { now: (): Date => REFERENCE_NOW },
       random_source: { bytes: (length: number): Buffer => Buffer.alloc(length, 3) },
+      deposit_request_lifecycle,
+      metrics,
       logger,
     }),
     hashing_call_count: (): number => hashing_call_count,
@@ -108,6 +117,8 @@ function build_unlock_harness(options: {
     saved_attempt_count: (): number => saved_attempt_count,
     opened_session_count: (): number => opened_session_count,
     activity_events,
+    deposit_request_lifecycle,
+    metrics,
     logger,
   };
 }
@@ -348,5 +359,57 @@ describe('DepositLinkUnlockService', () => {
     await unlock_with(harness);
 
     expect(harness.activity_events.recorded_types()).toEqual([]);
+  });
+
+  // Le lien qui vient de se verrouiller emporte la demande avec lui : le client
+  // n'a plus aucun moyen d'y deposer quoi que ce soit.
+  it('signale le blocage du lien sur l essai qui atteint le plafond', async () => {
+    const link: AccessLink = build_access_link({ max_pin_attempts: 5, failed_pin_attempts: 4 });
+    const harness = build_unlock_harness({ link, pin_is_correct: false });
+
+    await unlock_with(harness);
+
+    expect(harness.deposit_request_lifecycle.recorded_pipeline_events).toEqual([
+      { deposit_request_id: link.deposit_request_id, event: 'access_link_blocked' },
+    ]);
+  });
+
+  it('ne signale aucun blocage sur un essai perdu qui laisse encore des places', async () => {
+    const harness = build_unlock_harness({
+      link: build_access_link({ max_pin_attempts: 5, failed_pin_attempts: 1 }),
+      pin_is_correct: false,
+    });
+
+    await unlock_with(harness);
+
+    expect(harness.deposit_request_lifecycle.applied_events).toEqual([]);
+  });
+
+  // Le balayage periodique finirait par le constater, mais le client qui frappe
+  // a la porte nous l'apprend MAINTENANT.
+  it('signale l expiration des qu une tentative se presente sur un lien echu', async () => {
+    const link: AccessLink = build_access_link({
+      expires_at: new Date(REFERENCE_NOW.getTime() - 1),
+    });
+    const harness = build_unlock_harness({ link });
+
+    await unlock_with(harness);
+
+    expect(harness.deposit_request_lifecycle.recorded_pipeline_events).toEqual([
+      { deposit_request_id: link.deposit_request_id, event: 'access_link_expired' },
+    ]);
+  });
+
+  // Une revocation est une DECISION de l'avocat, pas une expiration : la faire
+  // passer pour telle marquerait « expiree sans depot » une demande qu'il a
+  // lui-meme fermee.
+  it('ne signale rien sur un lien revoque dont l echeance n est pas passee', async () => {
+    const harness = build_unlock_harness({
+      link: build_access_link({ status: 'revoked', revoked_at: REFERENCE_NOW }),
+    });
+
+    await unlock_with(harness);
+
+    expect(harness.deposit_request_lifecycle.applied_events).toEqual([]);
   });
 });

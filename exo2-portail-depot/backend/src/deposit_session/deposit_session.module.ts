@@ -20,6 +20,10 @@ import {
 } from '../deposited_file/authorize_client_upload';
 import { OBJECT_STORAGE, type ObjectStorage } from '../object_storage/object_storage';
 import {
+  DEPOSIT_REQUEST_LIFECYCLE,
+  type DepositRequestLifecycle,
+} from '../deposit/deposit_request_lifecycle';
+import {
   DEPOSIT_REQUEST_REPOSITORY,
   type DepositRequestRepository,
 } from '../deposit/deposit_request_repository';
@@ -42,6 +46,7 @@ import {
 import { APPLICATION_LOGGER } from '../shared/logging/logging.module';
 import type { ApplicationLogger } from '../shared/logging/application_logger';
 import { CLOCK, type Clock } from '../shared/clock';
+import { METRICS_REGISTRY, type MetricsRegistry } from '../observability/metrics';
 import {
   DEPOSIT_SESSION_REPOSITORY,
   DrizzleDepositSessionRepository,
@@ -84,6 +89,8 @@ import { PublicDepositLinkController } from './public_deposit_link.controller';
         ACCESS_LINK_TOKEN_HASHER,
         CLIENT_PIN_HASHER,
         CLIENT_PIN_THROTTLE_STORE,
+        DEPOSIT_REQUEST_LIFECYCLE,
+        METRICS_REGISTRY,
         CLOCK,
         RANDOM_SOURCE,
         APPLICATION_LOGGER,
@@ -95,6 +102,8 @@ import { PublicDepositLinkController } from './public_deposit_link.controller';
         token_hasher: AccessLinkTokenHasher,
         pin_hasher: PinHasher,
         throttle_store: ClientPinThrottleStore,
+        deposit_request_lifecycle: DepositRequestLifecycle,
+        metrics: MetricsRegistry,
         clock: Clock,
         random_source: RandomSource,
         logger: ApplicationLogger,
@@ -106,6 +115,8 @@ import { PublicDepositLinkController } from './public_deposit_link.controller';
           token_hasher,
           pin_hasher,
           throttle_store,
+          deposit_request_lifecycle,
+          metrics,
           clock,
           random_source,
           logger,
@@ -142,6 +153,7 @@ import { PublicDepositLinkController } from './public_deposit_link.controller';
         DEPOSITED_FILE_REPOSITORY,
         OBJECT_STORAGE,
         ACTIVITY_EVENT_REPOSITORY,
+        DEPOSIT_REQUEST_LIFECYCLE,
         CLOCK,
       ],
       useFactory: (
@@ -149,6 +161,7 @@ import { PublicDepositLinkController } from './public_deposit_link.controller';
         deposited_files: DepositedFileRepository,
         object_storage: ObjectStorage,
         activity_events: ActivityEventRepository,
+        deposit_request_lifecycle: DepositRequestLifecycle,
         clock: Clock,
       ): ClientFileRemover =>
         new ClientFileRemovalService({
@@ -156,6 +169,7 @@ import { PublicDepositLinkController } from './public_deposit_link.controller';
           deposited_files,
           object_storage,
           activity_events,
+          deposit_request_lifecycle,
           clock,
         }),
     },

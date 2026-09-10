@@ -37,6 +37,7 @@ import {
   type DepositedFileScanner,
 } from '../../../src/scan/scan_deposited_file';
 import { run_scan_queue_migrations } from '../../../src/scan/scan_queue_migrations';
+import { DEPOSIT_RECONCILER, type DepositReconciler } from '../../../src/scan/reconcile_deposits';
 import {
   ClamavFileScanner,
   parse_clamav_connection_settings,
@@ -110,7 +111,12 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
   let clock: MutableTestClock;
   let lawyer_cookie: string;
 
+  // `deposit_request_id` est le CURSEUR de l'histoire : il designe le dossier
+  // en cours, et les trois gestes de creation le deplacent. Chaque dossier
+  // garde donc son propre identifiant, sans quoi une assertion ecrite pour le
+  // premier interrogerait silencieusement le dernier cree.
   let deposit_request_id: string;
+  let messy_deposit_request_id: string;
   let current_token: string;
   let current_pin: string;
   let deposit_session_cookie: string;
@@ -119,6 +125,15 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
   let removed_deposited_file_id: string;
 
   let journal: readonly LawyerActivityLine[];
+  // Trois dossiers, parce qu'une seule demande ne peut pas porter les quinze
+  // types : une demande validee ne se degrade pas, donc elle n'expire jamais, et
+  // une demande dont une piece est infectee ne se valide jamais. L'assertion des
+  // types est donc l'UNION de trois journaux — et chaque dossier raconte une
+  // histoire entiere plutot qu'un morceau.
+  let completed_deposit_request_id: string;
+  let completed_journal: readonly LawyerActivityLine[];
+  let abandoned_deposit_request_id: string;
+  let abandoned_journal: readonly LawyerActivityLine[];
 
   // L'horloge de l'application avance a chaque geste : deux evenements de la
   // meme milliseconde rendraient l'ordre du journal indecidable, et c'est
@@ -282,6 +297,47 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
     return ticket.deposited_file_id;
   }
 
+  async function l_avocat_cree_une_demande_a_un_emplacement(title: string): Promise<void> {
+    const response = await request(app.getHttpServer())
+      .post(DEPOSIT_REQUESTS_PATH)
+      .set('Cookie', lawyer_cookie)
+      .send({
+        title,
+        expected_documents: [
+          {
+            label: 'Piece unique',
+            position: 0,
+            allowed_mime_types: [DECLARED_MIME_TYPE],
+            max_size_bytes: MAXIMUM_DOCUMENT_SIZE_BYTES,
+          },
+        ],
+      })
+      .expect(201);
+
+    const created = response.body as { id: string; access_link: { url: string; pin: string } };
+
+    deposit_request_id = created.id;
+    current_token = extract_token_from_delivered_url(created.access_link.url);
+    current_pin = created.access_link.pin;
+    let_a_moment_pass();
+  }
+
+  async function le_client_annonce_avoir_termine(): Promise<void> {
+    await request(app.getHttpServer())
+      .post(`${PUBLIC_DEPOSIT_PATH}/${current_token}/completion`)
+      .set('Cookie', deposit_session_cookie)
+      .expect(200);
+    let_a_moment_pass();
+  }
+
+  // Le dossier abandonne n'a plus personne pour frapper a la porte : c'est le
+  // balayage qui constate son expiration, et c'est exactement la panne qu'il
+  // existe pour rattraper.
+  async function le_balayage_constate_les_liens_expires(): Promise<void> {
+    await app.get<DepositReconciler>(DEPOSIT_RECONCILER).reconcile();
+    let_a_moment_pass();
+  }
+
   async function le_scan_rend_son_verdict(scanned_deposited_file_id: string): Promise<void> {
     await deposited_file_scanner.scan(scanned_deposited_file_id);
     let_a_moment_pass();
@@ -404,6 +460,7 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
     );
 
     await l_avocat_cree_la_demande_avec_quatre_emplacements();
+    messy_deposit_request_id = deposit_request_id;
     await le_client_se_trompe_de_pin();
     await le_client_deverrouille_le_lien();
     await le_client_lit_les_emplacements_attendus();
@@ -427,7 +484,39 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
     await le_client_epuise_les_essais_du_nouveau_lien();
     await le_client_insiste_sur_le_lien_bloque();
 
-    journal = await read_lawyer_journal(deposit_request_id, lawyer_cookie);
+    journal = await read_lawyer_journal(messy_deposit_request_id, lawyer_cookie);
+
+    // Un SECOND dossier, mene a son terme : celui-la seul peut etre valide, la
+    // validation exigeant que toutes les pieces soient saines.
+    await l_avocat_cree_une_demande_a_un_emplacement('Dossier mene a son terme');
+    completed_deposit_request_id = deposit_request_id;
+    await le_client_deverrouille_le_lien();
+    await le_client_lit_les_emplacements_attendus();
+    const completed_file_id: string = await le_client_depose_reellement(0, SANE_PDF_CONTENT);
+    // TERMINER d'abord, scanner ensuite : le verdict ne valide pas une demande
+    // que le client n'a pas declaree finie, sinon il perdrait le droit de
+    // remplacer encore une piece.
+    await le_client_annonce_avoir_termine();
+    await le_scan_rend_son_verdict(completed_file_id);
+    completed_journal = await read_lawyer_journal(completed_deposit_request_id, lawyer_cookie);
+
+    // Un TROISIEME dossier, ouvert puis jamais touche : le signal produit le
+    // plus parlant du portail, et le seul chemin vers `deposit_request_expired`.
+    await l_avocat_cree_une_demande_a_un_emplacement('Dossier ouvert puis abandonne');
+    abandoned_deposit_request_id = deposit_request_id;
+    // Le bond n'est qu'un MOYEN de rendre le lien expire, jamais l'objet de
+    // l'assertion, et on le rend donc apres usage. `BetterAuthLawyerSessionReader`
+    // re-verifie l'expiration absolue de la session sur NOTRE horloge alors que
+    // la bibliotheque a date le cookie sur celle du processus : passe la duree
+    // de vie d'une session, plus aucun avocat — meme fraichement reconnecte —
+    // n'est reconnu, et le reste du fichier deviendrait illisible pour une
+    // raison sans rapport avec ce qu'il raconte.
+    const instant_before_the_jump: Date = clock.now();
+    clock.advance_seconds((DEFAULT_SECURITY_POLICY.link_lifetime_days + 1) * 24 * 60 * 60);
+    await le_balayage_constate_les_liens_expires();
+    clock.set(instant_before_the_jump);
+
+    abandoned_journal = await read_lawyer_journal(abandoned_deposit_request_id, lawyer_cookie);
   }, 180_000);
 
   afterAll(async () => {
@@ -438,18 +527,43 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
   // ajoute demain fera echouer ce test tant qu'aucun chemin reel ne le produit.
   // Un type qu'aucun chemin n'ecrit est un type mort, et ce fichier est le seul
   // endroit ou cela se voit — chaque spec de service ne connait que les siens.
-  it('produit les douze types du domaine, et aucun de plus', () => {
-    const produced_types: readonly ActivityEventType[] = journal.map(
+  it('produit tous les types du domaine, et aucun de plus', () => {
+    const produced_types: readonly ActivityEventType[] = [
+      ...journal,
+      ...completed_journal,
+      ...abandoned_journal,
+    ].map((event: LawyerActivityLine): ActivityEventType => event.type);
+
+    expect(new Set(produced_types)).toEqual(new Set(ACTIVITY_EVENT_TYPES));
+  });
+
+  // Les trois types du cycle de vie, chacun sur le seul dossier qui peut le
+  // produire : les melanger ferait passer pour couvert un type qu'un autre
+  // dossier aurait ecrit.
+  it('raconte la fin d un dossier mene a son terme', () => {
+    const types: readonly ActivityEventType[] = completed_journal.map(
       (event: LawyerActivityLine): ActivityEventType => event.type,
     );
 
-    expect(new Set(produced_types)).toEqual(new Set(ACTIVITY_EVENT_TYPES));
+    expect(types).toContain('deposit_request_completed_by_client');
+    expect(types).toContain('deposit_request_validated');
+  });
+
+  it('raconte l expiration d un dossier que personne n a touche', () => {
+    const types: readonly ActivityEventType[] = abandoned_journal.map(
+      (event: LawyerActivityLine): ActivityEventType => event.type,
+    );
+
+    expect(types).toContain('deposit_request_expired');
+    // Aucun depot, aucune tentative d'entree : c'est ce vide qui fait le signal.
+    expect(types).not.toContain('deposited_file_received');
+    expect(types).not.toContain('deposit_session_opened');
   });
 
   it('rend le journal du plus recent au plus ancien, la derniere insistance en tete', async () => {
     const occurred_at_values: readonly number[] = (
       await request(app.getHttpServer())
-        .get(`${DEPOSIT_REQUESTS_PATH}/${deposit_request_id}/activity`)
+        .get(`${DEPOSIT_REQUESTS_PATH}/${messy_deposit_request_id}/activity`)
         .set('Cookie', lawyer_cookie)
         .expect(200)
     ).body.events.map((event: { occurred_at: string }): number =>
@@ -468,7 +582,7 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
       .from(activity_event)
       .where(
         and(
-          eq(activity_event.deposit_request_id, deposit_request_id),
+          eq(activity_event.deposit_request_id, messy_deposit_request_id),
           isNotNull(activity_event.client_ip),
         ),
       );
@@ -492,7 +606,7 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
     ).body as readonly DepositRequestOverviewLine[];
 
     const summarized: DepositRequestOverviewLine | undefined = overviews.find(
-      (overview: DepositRequestOverviewLine): boolean => overview.id === deposit_request_id,
+      (overview: DepositRequestOverviewLine): boolean => overview.id === messy_deposit_request_id,
     );
 
     expect(summarized?.activity_summary).toEqual({
@@ -515,7 +629,7 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
     const confrere_cookie: string = await sign_in_lawyer(confrere_email, CONFRERE_PASSWORD);
 
     await request(app.getHttpServer())
-      .get(`${DEPOSIT_REQUESTS_PATH}/${deposit_request_id}/activity`)
+      .get(`${DEPOSIT_REQUESTS_PATH}/${messy_deposit_request_id}/activity`)
       .set('Cookie', confrere_cookie)
       .expect(404);
 
@@ -558,7 +672,7 @@ describe("Vie entiere d'un dossier, lue dans son seul journal d'activite", () =>
       .from(activity_event)
       .where(
         and(
-          eq(activity_event.deposit_request_id, deposit_request_id),
+          eq(activity_event.deposit_request_id, messy_deposit_request_id),
           eq(activity_event.type, 'deposited_file_removed'),
         ),
       );

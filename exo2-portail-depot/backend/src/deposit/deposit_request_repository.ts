@@ -1,6 +1,11 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lte, sql } from 'drizzle-orm';
 import type { ApplicationDatabase } from '../db/database_connection';
-import { access_link, deposit_request, expected_document } from '../db/schema/deposit_schema';
+import {
+  access_link,
+  deposit_request,
+  deposited_file,
+  expected_document,
+} from '../db/schema/deposit_schema';
 import type { DepositRequestStatus } from '../domain/deposit_request_status';
 import type { DepositRequestCreationInput, ExpectedDocument } from '../domain/expected_document';
 import type { SecurityPolicy } from '../domain/security_policy';
@@ -51,6 +56,22 @@ export interface ClientDepositRequestView {
   expected_documents: ExpectedDocument[];
 }
 
+// Le statut AVANT et APRES : c'est la difference qui dit s'il faut journaliser.
+// Rendre le seul statut final obligerait l'appelant a le relire d'abord, donc a
+// ouvrir une fenetre entre sa lecture et l'ecriture.
+export interface DepositRequestStatusTransition {
+  status_before: DepositRequestStatus;
+  status_after: DepositRequestStatus;
+}
+
+// De quoi decider de la completude, en une seule lecture : les deux nombres
+// doivent venir du meme instant, sinon un depot concurrent les rendrait
+// incoherents entre eux.
+export interface DepositRequestCompletion {
+  expected_document_count: number;
+  clean_expected_document_count: number;
+}
+
 export interface DepositRequestRepository {
   create(input: {
     owner_user_id: string;
@@ -77,6 +98,25 @@ export interface DepositRequestRepository {
   // par la session de depot, qui designe le lien, qui designe la demande.
   // Exiger ici un proprietaire obligerait a en fabriquer un cote client.
   find_client_view(deposit_request_id: string): Promise<ClientDepositRequestView | null>;
+
+  // La decision est PASSEE a la base, elle n'en revient pas : lire le statut
+  // puis ecrire le suivant depuis l'appelant laisserait une fenetre ou le
+  // worker de scan et une action du client se marcheraient dessus. La ligne est
+  // verrouillee le temps que `decide` tranche.
+  // `null` : la demande n'existe pas — un verdict peut tomber sur une demande
+  // supprimee entre-temps.
+  apply_status_transition(
+    deposit_request_id: string,
+    decide: (current: DepositRequestStatus) => DepositRequestStatus,
+  ): Promise<DepositRequestStatusTransition | null>;
+
+  read_completion(deposit_request_id: string): Promise<DepositRequestCompletion>;
+
+  // Les demandes que PLUS PERSONNE ne touche : leur lien est encore actif — donc
+  // ni revoque ni bloque — mais son echeance est passee. Le client qui frappe a
+  // la porte nous l'apprend tout de suite ; celles-ci n'ont plus personne pour
+  // le faire, et c'est le balayage qui les constate.
+  list_incomplete_with_expired_link(instant: Date): Promise<string[]>;
 }
 
 // Un identifiant qui n'est pas un UUID ne doit pas atteindre Postgres : la
@@ -236,6 +276,94 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
         await this.deposited_files.list_for_deposit_request(found.id),
       ),
     };
+  }
+
+  // Une transaction, et la ligne VERROUILLEE le temps que l'appelant tranche :
+  // le worker de scan et une action du client visent la meme demande, et une
+  // lecture suivie d'une ecriture perdrait l'un des deux changements.
+  async apply_status_transition(
+    deposit_request_id: string,
+    decide: (current: DepositRequestStatus) => DepositRequestStatus,
+  ): Promise<DepositRequestStatusTransition | null> {
+    if (!UUID_SHAPE.test(deposit_request_id)) {
+      return null;
+    }
+
+    return this.database.transaction(
+      async (transaction): Promise<DepositRequestStatusTransition | null> => {
+        const locked_rows = await transaction
+          .select({ status: deposit_request.status })
+          .from(deposit_request)
+          .where(eq(deposit_request.id, deposit_request_id))
+          .for('update');
+
+        const found = locked_rows[0];
+        if (found === undefined) {
+          return null;
+        }
+
+        const status_before: DepositRequestStatus = found.status;
+        const status_after: DepositRequestStatus = decide(status_before);
+
+        // Aucune ecriture quand rien ne change : la reconciliation repasse sur
+        // les memes demandes, et une mise a jour par passe reveillerait les
+        // declencheurs et le journal de replication pour rien.
+        if (status_after !== status_before) {
+          await transaction
+            .update(deposit_request)
+            .set({ status: status_after })
+            .where(eq(deposit_request.id, deposit_request_id));
+        }
+
+        return { status_before, status_after };
+      },
+    );
+  }
+
+  // Une seule requete pour les deux nombres : les lire separement les prendrait
+  // a deux instants differents, et un depot concurrent les rendrait incoherents.
+  async read_completion(deposit_request_id: string): Promise<DepositRequestCompletion> {
+    if (!UUID_SHAPE.test(deposit_request_id)) {
+      return { expected_document_count: 0, clean_expected_document_count: 0 };
+    }
+
+    const rows = await this.database
+      .select({
+        expected_document_count: sql<number>`count(*)::int`,
+        clean_expected_document_count: sql<number>`count(${deposited_file}.id)::int`,
+      })
+      .from(expected_document)
+      .leftJoin(
+        deposited_file,
+        and(
+          eq(deposited_file.expected_document_id, expected_document.id),
+          eq(deposited_file.status, 'clean'),
+        ),
+      )
+      .where(eq(expected_document.deposit_request_id, deposit_request_id));
+
+    const found = rows[0];
+    return found === undefined
+      ? { expected_document_count: 0, clean_expected_document_count: 0 }
+      : found;
+  }
+
+  async list_incomplete_with_expired_link(instant: Date): Promise<string[]> {
+    const rows = await this.database
+      .selectDistinct({ id: deposit_request.id })
+      .from(deposit_request)
+      .innerJoin(access_link, eq(access_link.deposit_request_id, deposit_request.id))
+      .where(
+        and(
+          eq(deposit_request.status, 'incomplete'),
+          // `active` seulement : un lien revoque est une decision de l'avocat,
+          // pas une expiration, et il n'a aucun evenement de cycle de vie.
+          eq(access_link.status, 'active'),
+          lte(access_link.expires_at, instant),
+        ),
+      );
+
+    return rows.map((row): string => row.id);
   }
 
   async find_client_view(deposit_request_id: string): Promise<ClientDepositRequestView | null> {

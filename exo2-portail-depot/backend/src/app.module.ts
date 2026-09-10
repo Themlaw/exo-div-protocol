@@ -13,8 +13,10 @@ import { ScanModule } from './scan/scan.module';
 import { ClientDepositSessionGuard } from './deposit_session/client_deposit_session.guard';
 import { DatabaseModule } from './db/database.module';
 import { LawyerAuthModule } from './auth/lawyer_auth.module';
+import { DepositRequestLifecycleModule } from './deposit/deposit_request_lifecycle.module';
 import { DepositModule } from './deposit/deposit.module';
 import { HealthModule } from './health/health.module';
+import { ObservabilityModule } from './observability/observability.module';
 import { InternalStorageModule } from './storage/internal_storage.module';
 import { RouteAccessStartupAudit } from './auth/route_access_startup_audit';
 import { RouteAccessGuard } from './auth/route_access.guard';
@@ -39,7 +41,9 @@ import { UnroutedRequestFilter } from './auth/unrouted_request.filter';
     DatabaseModule,
     LawyerAuthModule,
     DepositModule,
+    DepositRequestLifecycleModule,
     HealthModule,
+    ObservabilityModule,
     InternalStorageModule,
   ],
   controllers: [],

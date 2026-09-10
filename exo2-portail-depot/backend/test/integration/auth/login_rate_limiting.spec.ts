@@ -12,6 +12,20 @@ import {
   LOGIN_IP_RATE_LIMIT_BOUNDS,
 } from '../../../src/auth/login_throttling';
 import { LAWYER_AUTH_ROUTE_PATHS } from '../../../src/auth/auth_http_contract';
+import { METRICS_REGISTRY, type MetricsRegistry } from '../../../src/observability/metrics';
+
+// Lit la valeur d'une serie dans le corps d'exposition.
+function read_series_value(body: string, series: string): number {
+  const line: string | undefined = body
+    .split('\n')
+    .find((candidate: string): boolean => candidate.startsWith(`${series} `));
+
+  if (line === undefined) {
+    throw new Error(`serie absente de l'exposition : ${series}`);
+  }
+
+  return Number(line.slice(series.length + 1));
+}
 
 // BetterAuth monte ses propres routes sous /api/v1/auth/* : il n'existe pas de
 // POST /auth/login maison (voir memories/api-routes.md, ecart 2).
@@ -129,6 +143,37 @@ describe('rate limiting sur la connexion avocat', () => {
       }
 
       expect(last_response?.status).toBe(429);
+    });
+
+    // Le 429 est deja affirme au-dessus ; ce qui reste a prouver, c'est qu'il
+    // laisse une TRACE mesurable. Une defense qui fonctionne sans se voir ne
+    // permet a personne de constater qu'on est attaque.
+    it('[19] le refus de cadence de la connexion avocat fait avancer son compteur', async () => {
+      const metrics: MetricsRegistry = app.get<MetricsRegistry>(METRICS_REGISTRY);
+      const before: number = read_series_value(
+        (await metrics.render()).body,
+        'portail_rate_limited_requests_total{surface="lawyer_login"}',
+      );
+
+      const attempt_count = LOGIN_IP_RATE_LIMIT_BOUNDS.max_failed_attempts_per_window + 5;
+      let last_response: request.Response | undefined;
+      for (let attempt_index = 0; attempt_index < attempt_count; attempt_index += 1) {
+        last_response = await attempt_login(
+          app,
+          wrong_password_attempt('cible-compteur@example.test'),
+        );
+        if (last_response.status === 429) {
+          break;
+        }
+      }
+
+      expect(last_response?.status).toBe(429);
+      expect(
+        read_series_value(
+          (await metrics.render()).body,
+          'portail_rate_limited_requests_total{surface="lawyer_login"}',
+        ),
+      ).toBeGreaterThan(before);
     });
 
     // LE TEST QUI COMPTE : sans limite par IP, il suffirait de changer de

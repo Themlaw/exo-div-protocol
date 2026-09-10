@@ -64,6 +64,11 @@ import type { DepositedFile } from '../domain/deposited_file';
 import { does_deposited_file_occupy_expected_document } from '../domain/deposited_file';
 import type { DepositRequestStatus } from '../domain/deposit_request_status';
 import {
+  DEPOSIT_REQUEST_LIFECYCLE,
+  type DepositRequestLifecycle,
+} from '../deposit/deposit_request_lifecycle';
+import { ForbiddenDepositRequestTransitionError } from '../domain/deposit_request_status';
+import {
   CLIENT_UPLOAD_AUTHORIZER,
   type ClientUploadAuthorizationOutcome,
   type ClientUploadAuthorizer,
@@ -135,6 +140,8 @@ export class PublicDepositLinkController {
     private readonly deposited_files: DepositedFileRepository,
     @Inject(ACCESS_LINK_TOKEN_HASHER) private readonly token_hasher: AccessLinkTokenHasher,
     @Inject(DEPOSIT_LINK_UNLOCKER) private readonly unlocker: DepositLinkUnlocker,
+    @Inject(DEPOSIT_REQUEST_LIFECYCLE)
+    private readonly deposit_request_lifecycle: DepositRequestLifecycle,
     @Inject(APPLICATION_ENVIRONMENT) private readonly environment: ApplicationEnvironment,
     @Inject(CLOCK) private readonly clock: Clock,
   ) {}
@@ -269,6 +276,44 @@ export class PublicDepositLinkController {
     });
 
     return render_upload_outcome(outcome);
+  }
+
+  // Le SEUL geste qui fait quitter `incomplete` a une demande, et il est
+  // explicite : basculer au dernier envoi bloquerait le client qui voulait
+  // encore remplacer une piece par une transition qu'il n'a pas demandee.
+  // A partir de la, les pieces sont gelees — c'est le dossier de l'avocat.
+  @Post(':token/completion')
+  @ClientSessionRoute()
+  @HttpCode(200)
+  async complete_deposit(@Req() request: IncomingMessage): Promise<{ status: DepositRequestStatus }> {
+    const opened_session: OpenedDepositSession | null =
+      read_authenticated_deposit_session(request);
+    if (opened_session === null) {
+      throw new UnauthorizedException();
+    }
+
+    try {
+      const status: DepositRequestStatus | null =
+        await this.deposit_request_lifecycle.apply_client_action({
+          deposit_request_id: opened_session.access_link.deposit_request_id,
+          access_link_id: opened_session.access_link.id,
+          action: 'client_finished_deposit',
+        });
+
+      if (status === null) {
+        throw new RoutedNotFoundException({ message: 'Cette demande est introuvable' });
+      }
+
+      return { status };
+    } catch (failure: unknown) {
+      // 409 plutot que 500 : terminer deux fois, ou terminer sur un lien
+      // bloque, n'est pas une panne — c'est une interface qui a propose une
+      // action qu'elle n'aurait pas du proposer, et le client doit le lire.
+      if (failure instanceof ForbiddenDepositRequestTransitionError) {
+        throw new ConflictException("Ce depot ne peut plus etre termine");
+      }
+      throw failure;
+    }
   }
 
   @Post(':token/unlock')

@@ -1,5 +1,5 @@
 {
-  "id": "b4018910-acd9-405e-8404-cf264a8b8fcd",
+  "id": "08ce7881-528a-4c04-999b-7db5664162bf",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1491,7 +1491,10 @@
         "deposited_file_scanned_clean",
         "deposited_file_scanned_infected",
         "deposited_file_rejected",
-        "deposited_file_downloaded"
+        "deposited_file_downloaded",
+        "deposit_request_completed_by_client",
+        "deposit_request_validated",
+        "deposit_request_expired"
       ]
     },
     "deposit.deposit_request_status": {

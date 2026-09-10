@@ -7,6 +7,7 @@ import { APPLICATION_LOGGER } from '../shared/logging/logging.module';
 import type { ApplicationLogger } from '../shared/logging/application_logger';
 import { CLOCK, type Clock } from '../shared/clock';
 import { DepositedFileModule } from '../deposited_file/deposited_file.module';
+import { DepositModule } from '../deposit/deposit.module';
 import {
   DEPOSITED_FILE_REPOSITORY,
   type DepositedFileRepository,
@@ -17,6 +18,14 @@ import {
   type ExpectedDocumentRepository,
 } from '../deposit/expected_document_repository';
 import { OBJECT_STORAGE, type ObjectStorage } from '../object_storage/object_storage';
+import {
+  DEPOSIT_REQUEST_LIFECYCLE,
+  type DepositRequestLifecycle,
+} from '../deposit/deposit_request_lifecycle';
+import {
+  DEPOSIT_REQUEST_REPOSITORY,
+  type DepositRequestRepository,
+} from '../deposit/deposit_request_repository';
 import {
   ACTIVITY_EVENT_REPOSITORY,
   type ActivityEventRepository,
@@ -39,6 +48,11 @@ import {
   type FileScanner,
 } from './clamav_scanner';
 import {
+  DrizzleScanQueueHealthReader,
+  SCAN_QUEUE_HEALTH_READER,
+  type ScanQueueHealthReader,
+} from './scan_queue_health';
+import {
   DEPOSITED_FILE_SCANNER,
   DepositedFileScanService,
   type DepositedFileScanner,
@@ -46,12 +60,22 @@ import {
 
 @Global()
 @Module({
-  imports: [DepositedFileModule],
+  // `DepositModule` pour le seul `DEPOSIT_REQUEST_REPOSITORY` dont la
+  // reconciliation a besoin. Un import explicite plutot que de rendre
+  // `DepositModule` global : ce qui est global n'a plus de dependance visible,
+  // et le graphe cesse de dire qui a besoin de quoi.
+  imports: [DepositedFileModule, DepositModule],
   providers: [
     {
       provide: SCAN_QUEUE,
       inject: [APPLICATION_DATABASE],
       useFactory: (database: ApplicationDatabase): ScanQueue => new GraphileScanQueue(database),
+    },
+    {
+      provide: SCAN_QUEUE_HEALTH_READER,
+      inject: [APPLICATION_DATABASE],
+      useFactory: (database: ApplicationDatabase): ScanQueueHealthReader =>
+        new DrizzleScanQueueHealthReader(database),
     },
     {
       provide: EXPECTED_DOCUMENT_REPOSITORY,
@@ -101,6 +125,7 @@ import {
         DEPOSITED_FILE_REPOSITORY,
         EXPECTED_DOCUMENT_REPOSITORY,
         ACTIVITY_EVENT_REPOSITORY,
+        DEPOSIT_REQUEST_LIFECYCLE,
         OBJECT_STORAGE,
         FILE_SCANNER,
         CLOCK,
@@ -110,6 +135,7 @@ import {
         deposited_files: DepositedFileRepository,
         expected_documents: ExpectedDocumentRepository,
         activity_events: ActivityEventRepository,
+        deposit_request_lifecycle: DepositRequestLifecycle,
         object_storage: ObjectStorage,
         file_scanner: FileScanner,
         clock: Clock,
@@ -119,6 +145,7 @@ import {
           deposited_files,
           activity_events,
           expected_documents,
+          deposit_request_lifecycle,
           object_storage,
           file_scanner,
           clock,
@@ -132,6 +159,8 @@ import {
         OBJECT_STORAGE,
         OBJECT_ARRIVAL_RECORDER,
         ACTIVITY_EVENT_REPOSITORY,
+        DEPOSIT_REQUEST_REPOSITORY,
+        DEPOSIT_REQUEST_LIFECYCLE,
         SCAN_QUEUE,
         CLOCK,
         APPLICATION_LOGGER,
@@ -141,6 +170,8 @@ import {
         object_storage: ObjectStorage,
         object_arrivals: ObjectArrivalRecorder,
         activity_events: ActivityEventRepository,
+        deposit_requests: DepositRequestRepository,
+        deposit_request_lifecycle: DepositRequestLifecycle,
         scan_queue: ScanQueue,
         clock: Clock,
         logger: ApplicationLogger,
@@ -150,6 +181,8 @@ import {
           object_storage,
           object_arrivals,
           activity_events,
+          deposit_requests,
+          deposit_request_lifecycle,
           scan_queue,
           clock,
           logger,
@@ -158,6 +191,7 @@ import {
   ],
   exports: [
     SCAN_QUEUE,
+    SCAN_QUEUE_HEALTH_READER,
     OBJECT_ARRIVAL_RECORDER,
     DEPOSITED_FILE_SCANNER,
     FILE_SCANNER,

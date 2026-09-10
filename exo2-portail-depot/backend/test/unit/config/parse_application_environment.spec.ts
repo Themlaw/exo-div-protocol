@@ -6,6 +6,7 @@ import {
   parse_application_environment,
   InvalidEnvironmentError,
   DEFAULT_HTTP_PORT,
+  DEFAULT_WORKER_METRICS_PORT,
   MINIMUM_LAWYER_AUTH_SECRET_LENGTH,
   DEFAULT_BETTER_AUTH_SECRET,
   MINIMUM_ACCESS_LINK_TOKEN_PEPPER_LENGTH,
@@ -68,6 +69,7 @@ describe('parse_application_environment', () => {
       public_base_url: VALID_RAW_ENVIRONMENT.PUBLIC_BASE_URL,
       lawyer_auth_secret: VALID_RAW_ENVIRONMENT.BETTER_AUTH_SECRET,
       http_port: DEFAULT_HTTP_PORT,
+      worker_metrics_port: DEFAULT_WORKER_METRICS_PORT,
       demo_lawyer_password: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_PASSWORD,
     });
   });
@@ -633,8 +635,8 @@ describe('PUBLIC_BASE_URL', () => {
   });
 });
 
-// Le port est la seule variable facultative : une installation qui ne le
-// renseigne pas doit demarrer, la valeur par defaut etant celle que le
+// Les deux ports sont les seules variables facultatives : une installation qui
+// ne les renseigne pas doit demarrer, les valeurs par defaut etant celles que le
 // Dockerfile et le proxy connaissent deja.
 describe('PORT', () => {
   function raw_environment_with_port(
@@ -692,8 +694,79 @@ describe('PORT', () => {
     },
   );
 
-  it("PORT ne figure pas parmi les variables requises : c'est la seule qui a une valeur par defaut", () => {
+  it("PORT ne figure pas parmi les variables requises : il a une valeur par defaut", () => {
     expect(REQUIRED_ENVIRONMENT_VARIABLES).not.toContain('PORT');
+  });
+});
+
+// Le port sur lequel le travailleur expose ses metriques. Il ne sert aucune
+// requete metier : ce port n'est publie que sur le reseau interne, et le
+// collecteur est le seul a l'atteindre.
+describe('WORKER_METRICS_PORT', () => {
+  function raw_environment_with_worker_port(
+    port: string | undefined,
+  ): Readonly<Record<string, string | undefined>> {
+    return { ...VALID_RAW_ENVIRONMENT, WORKER_METRICS_PORT: port };
+  }
+
+  function violations_for_worker_port(port: string): readonly EnvironmentViolation[] {
+    try {
+      parse_application_environment(raw_environment_with_worker_port(port));
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(InvalidEnvironmentError);
+      return (error as InvalidEnvironmentError).violations;
+    }
+    throw new Error('parse_application_environment aurait du lever');
+  }
+
+  it('absente, le port vaut la valeur par defaut', () => {
+    expect(
+      parse_application_environment(raw_environment_with_worker_port(undefined))
+        .worker_metrics_port,
+    ).toBe(DEFAULT_WORKER_METRICS_PORT);
+  });
+
+  it('vide, le port vaut aussi la valeur par defaut', () => {
+    expect(
+      parse_application_environment(raw_environment_with_worker_port('')).worker_metrics_port,
+    ).toBe(DEFAULT_WORKER_METRICS_PORT);
+  });
+
+  it('une valeur explicite est retenue telle quelle', () => {
+    expect(
+      parse_application_environment(raw_environment_with_worker_port('9101')).worker_metrics_port,
+    ).toBe(9101);
+  });
+
+  it.each([
+    ['non numerique', 'neuf-mille'],
+    ['decimal', '9100.5'],
+    ['negatif', '-1'],
+    ['espaces autour', ' 9100 '],
+    ['hors borne haute', '65536'],
+    ['zero', '0'],
+    ['privilegie', '80'],
+  ])(
+    'une valeur %s est malformed plutot que silencieusement corrigee',
+    (_label: string, port: string) => {
+      expect(violations_for_worker_port(port)).toContainEqual({
+        variable: 'WORKER_METRICS_PORT',
+        reason: 'malformed',
+      });
+    },
+  );
+
+  // Deux processus sur la meme machine : un travailleur qui ecouterait sur le
+  // port de l'API ne demarrerait pas, et l'erreur serait un EADDRINUSE sans
+  // rapport apparent avec la configuration.
+  it("refuse le port deja pris par l'API", () => {
+    expect(
+      violations_for_worker_port(String(parse_application_environment(VALID_RAW_ENVIRONMENT).http_port)),
+    ).toContainEqual({ variable: 'WORKER_METRICS_PORT', reason: 'malformed' });
+  });
+
+  it("WORKER_METRICS_PORT ne figure pas parmi les variables requises", () => {
+    expect(REQUIRED_ENVIRONMENT_VARIABLES).not.toContain('WORKER_METRICS_PORT');
   });
 });
 

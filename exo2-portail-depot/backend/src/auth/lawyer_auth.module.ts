@@ -21,6 +21,7 @@ import {
 import { LAWYER_SESSION_READER, type LawyerSessionReader } from './lawyer_session_reader';
 import { LAWYER_AUTH_LOG_CONTEXT } from './lawyer_auth_logging';
 import { CLOCK, type Clock } from '../shared/clock';
+import { METRICS_REGISTRY, type MetricsRegistry } from '../observability/metrics';
 import {
   DrizzleLoginThrottleStore,
   LOGIN_THROTTLE_STORE,
@@ -126,6 +127,7 @@ export class DemoLawyerAccountBootstrapper implements OnModuleInit {
         LOGIN_THROTTLE_STORE,
         CLOCK,
         ARGON2_CONCURRENCY_GATE,
+        METRICS_REGISTRY,
         APPLICATION_ENVIRONMENT,
         APPLICATION_LOGGER,
       ],
@@ -133,6 +135,7 @@ export class DemoLawyerAccountBootstrapper implements OnModuleInit {
         throttle_store: LoginThrottleStore,
         clock: Clock,
         concurrency_gate: Argon2ConcurrencyGate,
+        metrics: MetricsRegistry,
         environment: ApplicationEnvironment,
         logger: ApplicationLogger,
       ): LawyerLoginThrottler =>
@@ -140,6 +143,7 @@ export class DemoLawyerAccountBootstrapper implements OnModuleInit {
           throttle_store,
           clock,
           concurrency_gate,
+          metrics,
           trusted_proxy_hop_count: environment.trusted_proxy_hop_count,
           logger,
           maximum_request_body_bytes: MAXIMUM_LAWYER_AUTH_REQUEST_BODY_BYTES,

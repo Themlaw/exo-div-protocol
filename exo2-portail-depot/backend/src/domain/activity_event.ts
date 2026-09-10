@@ -18,6 +18,14 @@ export const ACTIVITY_EVENT_TYPES = [
   'deposited_file_scanned_infected',
   'deposited_file_rejected',
   'deposited_file_downloaded',
+  // Les trois seuls changements d'etat qui entrent au journal, et chacun porte
+  // un fait qu'aucune autre ligne ne dit. `blocked` et la reouverture apres un
+  // verdict degrade en sont volontairement absents : la ligne qui les cause est
+  // deja juste au-dessus, au meme instant, et les redire rendrait l'histoire
+  // moins lisible, pas plus.
+  'deposit_request_completed_by_client',
+  'deposit_request_validated',
+  'deposit_request_expired',
 ] as const;
 
 export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];

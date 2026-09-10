@@ -15,7 +15,7 @@ import {
 } from '../auth/auth_http_contract';
 import { APPLICATION_ENVIRONMENT } from '../config/configuration.module';
 import type { ApplicationEnvironment } from '../config/environment';
-import { matches_internal_storage_webhook_secret } from './internal_storage_webhook_secret';
+import { matches_internal_shared_secret } from '../auth/internal_shared_secret';
 import {
   OBJECT_ARRIVAL_RECORDER,
   type ObjectArrivalRecorder,
@@ -50,7 +50,7 @@ export class InternalStorageEventsController {
 
     if (
       typeof presented_secret !== 'string' ||
-      !matches_internal_storage_webhook_secret(
+      !matches_internal_shared_secret(
         presented_secret,
         this.environment.internal_storage_webhook_secret,
       )

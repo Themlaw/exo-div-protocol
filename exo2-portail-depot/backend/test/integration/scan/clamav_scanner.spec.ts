@@ -1,4 +1,5 @@
 import { Readable } from 'node:stream';
+import { createServer, type AddressInfo, type Server, type Socket } from 'node:net';
 import {
   ClamavFileScanner,
   parse_clamav_connection_settings,
@@ -83,5 +84,54 @@ describe('Scanner ClamAV', () => {
     );
 
     expect(verdict).toBe('scanner_unavailable');
+  });
+
+  // La sonde de disponibilite, qui n'existe que pour la metrique
+  // `portail_clamav_up`. Elle passe par la MEME connexion qu'un scan : si le
+  // PING repond, le scan repondra. Une sonde qui interrogerait autre chose que
+  // le chemin reel finirait par etre verte pendant une panne.
+  describe('Sonde de disponibilite', () => {
+    it('rend available quand clamd repond a son PING', async () => {
+      await expect(build_scanner().probe_availability()).resolves.toBe('available');
+    });
+
+    it("rend unavailable quand rien n'ecoute sur le port", async () => {
+      await expect(build_scanner({ port: 1 }).probe_availability()).resolves.toBe('unavailable');
+    });
+
+    // Le cas qui distingue une sonde d'un simple test de connexion : le port
+    // accepte, donc `connect` reussit, et pourtant clamd est mort. Un scan y
+    // resterait suspendu ; la sonde doit rendre la main.
+    it('rend unavailable quand la connexion est acceptee mais reste muette', async () => {
+      // Les sockets acceptes sont gardes pour etre detruits a la fin : `close`
+      // seul n'aboutit jamais, il attend la fin des connexions ouvertes, et
+      // celui que la sonde a abandonne reste pendant cote serveur. La suite
+      // entiere expirerait sur un nettoyage.
+      const accepted_sockets: Socket[] = [];
+      const mute_server: Server = createServer((socket: Socket): void => {
+        accepted_sockets.push(socket);
+      });
+      await new Promise<void>((resolve): void => {
+        mute_server.listen(0, '127.0.0.1', resolve);
+      });
+      const mute_port: number = (mute_server.address() as AddressInfo).port;
+
+      try {
+        await expect(
+          build_scanner({
+            host: '127.0.0.1',
+            port: mute_port,
+            timeout_milliseconds: 200,
+          }).probe_availability(),
+        ).resolves.toBe('unavailable');
+      } finally {
+        for (const accepted_socket of accepted_sockets) {
+          accepted_socket.destroy();
+        }
+        await new Promise<void>((resolve): void => {
+          mute_server.close((): void => resolve());
+        });
+      }
+    });
   });
 });

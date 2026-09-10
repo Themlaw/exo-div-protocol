@@ -21,6 +21,7 @@ import {
 } from '../deposited_file/file_signatures';
 import type { FileScanner } from './clamav_scanner';
 import type { ActivityEventRepository } from '../activity/activity_event_repository';
+import type { DepositRequestLifecycle } from '../deposit/deposit_request_lifecycle';
 import { build_activity_event, type ActivityEventType } from '../domain/activity_event';
 
 export const DEPOSITED_FILE_SCANNER: unique symbol = Symbol('DEPOSITED_FILE_SCANNER');
@@ -41,6 +42,7 @@ export interface DepositedFileScanDependencies {
   deposited_files: DepositedFileRepository;
   activity_events: ActivityEventRepository;
   expected_documents: ExpectedDocumentRepository;
+  deposit_request_lifecycle: DepositRequestLifecycle;
   object_storage: ObjectStorage;
   file_scanner: FileScanner;
   clock: Clock;
@@ -72,12 +74,14 @@ export class DepositedFileScanService implements DepositedFileScanner {
     }
 
     if (verdict === 'infected') {
+      const expected_document: ExpectedDocument | null =
+        await this.dependencies.expected_documents.find_by_id(file.expected_document_id);
+
       await this.apply_verdict(file, 'infected');
-      await this.journalize(
-        file,
-        'deposited_file_scanned_infected',
-        await this.dependencies.expected_documents.find_by_id(file.expected_document_id),
-      );
+      await this.journalize(file, 'deposited_file_scanned_infected', expected_document);
+      // La completude est REVOCABLE : une demande deja validee doit rouvrir sur
+      // un verdict qui se degrade, sinon une piece infectee resterait acquise.
+      await this.notice_completeness_lost(expected_document);
       this.dependencies.logger.warn(SCAN_LOG_CONTEXT, 'piece infectee, objet supprime', {
         deposited_file_id: file.id,
       });
@@ -133,6 +137,7 @@ export class DepositedFileScanService implements DepositedFileScanner {
         file.object_key,
       );
       await this.journalize(scanned_file, 'deposited_file_rejected', expected_document);
+      await this.notice_completeness_lost(expected_document);
       // Le journal dit A L'AVOCAT qu'une piece a ete refusee ; ce `warn` dit a
       // l'exploitant POURQUOI. Les deux types — annonce et detecte — sont la
       // seule facon de distinguer un client qui s'est trompe de fichier d'un
@@ -150,6 +155,15 @@ export class DepositedFileScanService implements DepositedFileScanner {
 
     await this.apply_verdict(scanned_file, 'clean');
     await this.journalize(scanned_file, 'deposited_file_scanned_clean', expected_document);
+
+    // APRES l'ecriture du verdict : la completude se lit en base, et l'annoncer
+    // avant ferait compter une piece que la requete ne voit pas encore saine.
+    if (expected_document !== null) {
+      await this.dependencies.deposit_request_lifecycle.notice_deposited_file_became_clean(
+        expected_document.deposit_request_id,
+      );
+    }
+
     return { kind: 'clean' };
   }
 
@@ -165,6 +179,21 @@ export class DepositedFileScanService implements DepositedFileScanner {
   // demande, et un evenement d'audit sur une demande effacee serait refuse par
   // sa propre clef etrangere. Le jour ou l'avocat pourra supprimer un document
   // attendu isolement, il faudra retrouver la demande par le lien.
+  // `null` : l'emplacement a disparu, donc la demande aussi — le cycle de vie
+  // n'aurait plus rien a faire evoluer.
+  private async notice_completeness_lost(
+    expected_document: ExpectedDocument | null,
+  ): Promise<void> {
+    if (expected_document === null) {
+      return;
+    }
+
+    await this.dependencies.deposit_request_lifecycle.apply_pipeline_event({
+      deposit_request_id: expected_document.deposit_request_id,
+      event: 'expected_document_became_not_clean',
+    });
+  }
+
   private async journalize(
     file: DepositedFile,
     type: ActivityEventType,

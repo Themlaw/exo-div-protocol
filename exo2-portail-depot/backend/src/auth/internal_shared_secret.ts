@@ -10,7 +10,10 @@ function digest_of(value: string): Buffer {
   return createHash(SECRET_DIGEST_ALGORITHM).update(value, 'utf8').digest();
 }
 
-export function matches_internal_storage_webhook_secret(
+// Neutre quant a l'appelant : le webhook de stockage et le collecteur de
+// metriques presentent tous deux un secret partage, et une comparaison en temps
+// constant n'a aucune raison d'exister en deux exemplaires.
+export function matches_internal_shared_secret(
   presented_secret: string | undefined,
   expected_secret: string,
 ): boolean {

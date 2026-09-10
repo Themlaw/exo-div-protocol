@@ -7,7 +7,7 @@ CREATE SCHEMA "deposit";
 CREATE TYPE "security"."authentication_failure_kind" AS ENUM('lawyer_login', 'client_pin');--> statement-breakpoint
 CREATE TYPE "deposit"."access_link_status" AS ENUM('active', 'blocked', 'revoked');--> statement-breakpoint
 CREATE TYPE "deposit"."activity_actor_kind" AS ENUM('lawyer', 'client', 'system');--> statement-breakpoint
-CREATE TYPE "deposit"."activity_event_type" AS ENUM('access_link_issued', 'access_link_revoked', 'access_link_blocked', 'unusable_access_link_attempted', 'deposit_session_opened', 'client_pin_rejected', 'deposited_file_received', 'deposited_file_removed', 'deposited_file_scanned_clean', 'deposited_file_scanned_infected', 'deposited_file_rejected', 'deposited_file_downloaded');--> statement-breakpoint
+CREATE TYPE "deposit"."activity_event_type" AS ENUM('access_link_issued', 'access_link_revoked', 'access_link_blocked', 'unusable_access_link_attempted', 'deposit_session_opened', 'client_pin_rejected', 'deposited_file_received', 'deposited_file_removed', 'deposited_file_scanned_clean', 'deposited_file_scanned_infected', 'deposited_file_rejected', 'deposited_file_downloaded', 'deposit_request_completed_by_client', 'deposit_request_validated', 'deposit_request_expired');--> statement-breakpoint
 CREATE TYPE "deposit"."deposit_request_status" AS ENUM('incomplete', 'processing', 'validated', 'blocked', 'expired_incomplete');--> statement-breakpoint
 CREATE TYPE "deposit"."deposited_file_status" AS ENUM('pending_upload', 'pending_scan', 'clean', 'infected', 'rejected');--> statement-breakpoint
 CREATE TABLE "auth"."account" (

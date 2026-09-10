@@ -56,6 +56,9 @@ const NON_LAWYER_ROUTE_WHITELIST: ReadonlyArray<
   (declaration) =>
     declaration.http_method === 'DELETE' &&
     declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token/files/:deposited_file_id`,
+  (declaration) =>
+    declaration.http_method === 'POST' &&
+    declaration.path === `${PUBLIC_DEPOSIT_PATH}/:token/completion`,
   // [F6] La surface d'authentification, declaree a la main parce qu'elle
   // echappe au routeur Nest. Trois chemins EXACTS et rien de plus : la
   // bibliotheque en expose une trentaine sous le meme prefixe, et le montage

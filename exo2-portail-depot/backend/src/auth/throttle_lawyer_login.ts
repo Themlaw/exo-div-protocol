@@ -17,6 +17,7 @@ import {
 } from './login_throttling';
 import type { LoginThrottleIdentity, LoginThrottleStore } from './login_throttle_store';
 import type { Argon2ConcurrencyAdmission, Argon2ConcurrencyGate } from '../shared/argon2_concurrency_gate';
+import type { MetricsRegistry } from '../observability/metrics';
 
 // Le ralentissement annonce peut monter a cinq minutes ; le ralentissement
 // REELLEMENT applique est plafonne bien plus bas. Dormir cinq minutes cote
@@ -183,6 +184,7 @@ export interface LawyerLoginThrottlingDependencies {
   clock: Clock;
   trusted_proxy_hop_count: number;
   concurrency_gate: Argon2ConcurrencyGate;
+  metrics: MetricsRegistry;
   logger: ApplicationLogger;
   maximum_request_body_bytes: number;
 }
@@ -256,6 +258,11 @@ export function build_lawyer_login_throttler(
       // suivante lirait le meme compteur, obtiendrait le meme delai, et
       // pilonner ne couterait jamais plus cher qu'au premier refus.
       await dependencies.throttle_store.record_refused_probe(identity, now);
+      // Le refus DELIBERE seulement. Le 429 de file pleine, plus bas, dit que le
+      // service sature et non qu'on se defend : le confondre avec celui-ci
+      // ferait lire une montee de charge comme une attaque. Il aura sa mesure
+      // avec les jauges de file.
+      dependencies.metrics.count_rate_limited_request('lawyer_login');
       respond_with_neutral_refusal(response, 429, decision.retry_after_seconds);
       return 'handled';
     }

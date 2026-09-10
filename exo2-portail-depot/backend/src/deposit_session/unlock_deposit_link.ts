@@ -3,6 +3,7 @@ import type { RandomSource } from '../domain/presigned_upload';
 import { draw_unbiased_secret } from '../shared/random_secret';
 import { ACCESS_LINK_TOKEN_ALPHABET } from '../domain/presigned_upload';
 import { is_access_link_usable, type AccessLink } from '../domain/access_link';
+import type { DepositRequestLifecycle } from '../deposit/deposit_request_lifecycle';
 import {
   verify_client_pin,
   type PinHasher,
@@ -12,6 +13,7 @@ import { open_client_deposit_session } from '../domain/deposit_session';
 import type { AccessLinkTokenHasher } from '../access_link/access_link_token_hasher';
 import type { AccessLinkRepository } from '../access_link/access_link_repository';
 import type { ApplicationLogger } from '../shared/logging/application_logger';
+import type { MetricsRegistry } from '../observability/metrics';
 import type { ActivityEventRepository } from '../activity/activity_event_repository';
 import { build_activity_event, type ActivityEventType } from '../domain/activity_event';
 import {
@@ -59,6 +61,8 @@ export interface DepositLinkUnlockDependencies {
   throttle_store: ClientPinThrottleStore;
   clock: Clock;
   random_source: RandomSource;
+  deposit_request_lifecycle: DepositRequestLifecycle;
+  metrics: MetricsRegistry;
   logger: ApplicationLogger;
 }
 
@@ -75,6 +79,7 @@ export class DepositLinkUnlockService implements DepositLinkUnlocker {
     const now: Date = this.dependencies.clock.now();
 
     if (await this.ip_budget_is_exhausted(input.client_ip, now)) {
+      this.dependencies.metrics.count_rate_limited_request('client_pin');
       return { kind: 'rate_limited' };
     }
 
@@ -105,6 +110,11 @@ export class DepositLinkUnlockService implements DepositLinkUnlocker {
         { client_ip: input.client_ip },
       );
 
+      // Le pendant chiffre du `warn` ci-dessus. Un balayage de jetons se lit
+      // dans une pente, pas dans une ligne de journal : c'est le compteur qui
+      // porte l'alerte, le message qui porte le detail.
+      this.dependencies.metrics.count_unknown_access_link_attempt();
+
       return { kind: 'refused' };
     }
 
@@ -125,6 +135,18 @@ export class DepositLinkUnlockService implements DepositLinkUnlocker {
       // `client_pin_rejected` — ce serait un mensonge. La tentative existe
       // pourtant, et le lien qu'elle visait est connu.
       await this.journalize(link, 'unusable_access_link_attempted', input.client_ip, now);
+
+      // L'expiration seulement, jamais la revocation : le balayage periodique
+      // finirait par la constater, mais le client qui frappe a la porte nous
+      // l'apprend MAINTENANT. Une revocation, elle, est une decision de
+      // l'avocat et n'a aucun evenement de cycle de vie.
+      if (link.expires_at.getTime() <= now.getTime()) {
+        await this.dependencies.deposit_request_lifecycle.apply_pipeline_event({
+          deposit_request_id: link.deposit_request_id,
+          event: 'access_link_expired',
+        });
+      }
+
       return { kind: 'refused' };
     }
 
@@ -160,6 +182,10 @@ export class DepositLinkUnlockService implements DepositLinkUnlocker {
       // fois.
       if (outcome.link_just_became_blocked) {
         await this.journalize(link, 'access_link_blocked', input.client_ip, now);
+        await this.dependencies.deposit_request_lifecycle.apply_pipeline_event({
+          deposit_request_id: link.deposit_request_id,
+          event: 'access_link_blocked',
+        });
         return { kind: 'blocked' };
       }
 

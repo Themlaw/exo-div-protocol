@@ -1,6 +1,8 @@
 import { Global, Module } from '@nestjs/common';
 import { APPLICATION_DATABASE } from '../db/database.module';
 import type { ApplicationDatabase } from '../db/database_connection';
+import { METRICS_REGISTRY, type MetricsRegistry } from '../observability/metrics';
+import { MeteredActivityEventRepository } from '../observability/metered_activity_event_repository';
 import {
   ACTIVITY_EVENT_REPOSITORY,
   DrizzleActivityEventRepository,
@@ -16,9 +18,15 @@ import {
   providers: [
     {
       provide: ACTIVITY_EVENT_REPOSITORY,
-      inject: [APPLICATION_DATABASE],
-      useFactory: (database: ApplicationDatabase): ActivityEventRepository =>
-        new DrizzleActivityEventRepository(database),
+      inject: [APPLICATION_DATABASE, METRICS_REGISTRY],
+      useFactory: (
+        database: ApplicationDatabase,
+        metrics: MetricsRegistry,
+      ): ActivityEventRepository =>
+        new MeteredActivityEventRepository(
+          new DrizzleActivityEventRepository(database),
+          metrics,
+        ),
     },
   ],
   exports: [ACTIVITY_EVENT_REPOSITORY],

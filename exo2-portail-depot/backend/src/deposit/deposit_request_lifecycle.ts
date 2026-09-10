@@ -91,17 +91,7 @@ export class DepositRequestLifecycleService implements DepositRequestLifecycle {
   async notice_deposited_file_became_clean(
     deposit_request_id: string,
   ): Promise<DepositRequestStatus | null> {
-    const completion: DepositRequestCompletion =
-      await this.dependencies.deposit_requests.read_completion(deposit_request_id);
-
-    if (!are_all_expected_documents_clean(completion)) {
-      return null;
-    }
-
-    return this.apply_pipeline_event({
-      deposit_request_id,
-      event: 'all_expected_documents_clean',
-    });
+    return this.validate_when_every_expected_document_is_clean(deposit_request_id);
   }
 
   async apply_client_action(input: {
@@ -130,7 +120,36 @@ export class DepositRequestLifecycleService implements DepositRequestLifecycle {
       }),
     );
 
-    return transition.status_after;
+    // La completude est REPOSEE ici, et pas seulement a la chute d'un verdict :
+    // le scan est plus rapide que le client, et un dossier dont toutes les
+    // pieces etaient deja saines restait « en traitement » pour toujours. La
+    // transition 'all_expected_documents_clean' ne part que de 'processing', et
+    // au moment du verdict la demande etait encore 'incomplete' — personne ne
+    // revenait poser la question apres le clic de fin de depot.
+    const status_after_completeness: DepositRequestStatus | null =
+      await this.validate_when_every_expected_document_is_clean(input.deposit_request_id);
+
+    return status_after_completeness ?? transition.status_after;
+  }
+
+  // Le seul endroit qui traduit « toutes les pieces sont saines » en transition.
+  // Les deux chemins qui peuvent rendre une demande complete — le verdict de
+  // scan et le clic de fin de depot — passent par lui, sinon l'un des deux
+  // finirait par oublier la moitie de la regle.
+  private async validate_when_every_expected_document_is_clean(
+    deposit_request_id: string,
+  ): Promise<DepositRequestStatus | null> {
+    const completion: DepositRequestCompletion =
+      await this.dependencies.deposit_requests.read_completion(deposit_request_id);
+
+    if (!are_all_expected_documents_clean(completion)) {
+      return null;
+    }
+
+    return this.apply_pipeline_event({
+      deposit_request_id,
+      event: 'all_expected_documents_clean',
+    });
   }
 
   // Journalise APRES l'ecriture du statut, et seulement si le statut a REELLEMENT

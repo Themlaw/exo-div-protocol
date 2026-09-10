@@ -239,6 +239,54 @@ describe('fin de depot annoncee par le client', () => {
       expect(harness.activity_events.recorded_types()).toEqual([]);
     },
   );
+
+  // Le cas signale par l'evaluateur : le scan avait rendu son verdict AVANT que
+  // le client ne clique sur « Terminer le depot ». A cet instant la demande
+  // etait 'incomplete', et 'all_expected_documents_clean' n'y transite pas ;
+  // plus rien ne revenait ensuite poser la question, et la demande restait « en
+  // traitement » pour toujours alors que tout etait sain.
+  it('valide immediatement une fin de depot dont toutes les pieces sont deja saines', async () => {
+    const harness: LifecycleHarness = build_lifecycle_harness('incomplete');
+    harness.deposit_requests.seed_completion(DEPOSIT_REQUEST_ID, {
+      expected_document_count: 1,
+      clean_expected_document_count: 1,
+    });
+
+    const status: DepositRequestStatus | null = await harness.lifecycle.apply_client_action({
+      deposit_request_id: DEPOSIT_REQUEST_ID,
+      access_link_id: ACCESS_LINK_ID,
+      action: 'client_finished_deposit',
+    });
+
+    expect(status).toBe('validated');
+    expect(harness.status_of()).toBe('validated');
+    expect(harness.activity_events.recorded_types()).toEqual([
+      'deposit_request_completed_by_client',
+      'deposit_request_validated',
+    ]);
+  });
+
+  // Le pendant du precedent : une piece encore en analyse doit laisser la
+  // demande « en traitement ». Sans cette borne, la relecture de completude
+  // validerait un dossier dont le verdict n'est pas tombe.
+  it('laisse en traitement une fin de depot dont une piece attend encore son verdict', async () => {
+    const harness: LifecycleHarness = build_lifecycle_harness('incomplete');
+    harness.deposit_requests.seed_completion(DEPOSIT_REQUEST_ID, {
+      expected_document_count: 2,
+      clean_expected_document_count: 1,
+    });
+
+    const status: DepositRequestStatus | null = await harness.lifecycle.apply_client_action({
+      deposit_request_id: DEPOSIT_REQUEST_ID,
+      access_link_id: ACCESS_LINK_ID,
+      action: 'client_finished_deposit',
+    });
+
+    expect(status).toBe('processing');
+    expect(harness.activity_events.recorded_types()).toEqual([
+      'deposit_request_completed_by_client',
+    ]);
+  });
 });
 
 describe('une piece devenue saine', () => {

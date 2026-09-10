@@ -1,6 +1,10 @@
 import type { ReactElement } from 'react';
 import { Navigate } from 'react-router-dom';
 
+import { DepositRequestDashboardScreen } from '../screens/deposit_request_dashboard';
+import { LawyerLoginScreen } from '../screens/lawyer_login';
+import { MyDepositRequestsScreen } from '../screens/my_deposit_requests';
+import { NewDepositRequestScreen } from '../screens/new_deposit_request';
 import { ScreenUnderConstruction } from '../screens/screen_under_construction';
 import { RequireLawyerSession } from './require_lawyer_session';
 
@@ -38,19 +42,19 @@ export const FRONT_ROUTES: readonly FrontRouteDeclaration[] = [
   },
   {
     path: LAWYER_LOGIN_PATH,
-    element: <ScreenUnderConstruction screen_name="Connexion" />,
+    element: <LawyerLoginScreen />,
   },
   {
     path: LAWYER_DEPOSIT_REQUESTS_PATH,
-    element: <ScreenUnderConstruction screen_name="Mes demandes" />,
+    element: <MyDepositRequestsScreen />,
   },
   {
     path: LAWYER_NEW_DEPOSIT_REQUEST_PATH,
-    element: <ScreenUnderConstruction screen_name="Nouvelle demande" />,
+    element: <NewDepositRequestScreen />,
   },
   {
     path: LAWYER_DEPOSIT_REQUEST_PATH,
-    element: <ScreenUnderConstruction screen_name="Suivi d une demande" />,
+    element: <DepositRequestDashboardScreen />,
   },
   {
     path: CLIENT_DEPOSIT_PATH,

@@ -81,6 +81,7 @@ export interface DepositRequestDetail {
   status: DepositRequestStatus;
   security_policy: SecurityPolicy;
   created_at: string;
+  link_expires_at: string | null;
   expected_documents: LawyerExpectedDocumentView[];
 }
 
@@ -95,22 +96,27 @@ export interface AccessLinkDelivery {
   expires_at: string;
 }
 
-export type ActivityEventType =
-  | 'access_link_issued'
-  | 'access_link_revoked'
-  | 'access_link_blocked'
-  | 'unusable_access_link_attempted'
-  | 'deposit_session_opened'
-  | 'client_pin_rejected'
-  | 'deposited_file_received'
-  | 'deposited_file_removed'
-  | 'deposited_file_scanned_clean'
-  | 'deposited_file_scanned_infected'
-  | 'deposited_file_rejected'
-  | 'deposited_file_downloaded'
-  | 'deposit_request_completed_by_client'
-  | 'deposit_request_validated'
-  | 'deposit_request_expired';
+// Enumere a l'execution : c'est ce qui permet a un test de balayer LES QUINZE
+// types et de prouver qu'aucun n'atteint l'ecran sans traduction francaise.
+export const ACTIVITY_EVENT_TYPES = [
+  'access_link_issued',
+  'access_link_revoked',
+  'access_link_blocked',
+  'unusable_access_link_attempted',
+  'deposit_session_opened',
+  'client_pin_rejected',
+  'deposited_file_received',
+  'deposited_file_removed',
+  'deposited_file_scanned_clean',
+  'deposited_file_scanned_infected',
+  'deposited_file_rejected',
+  'deposited_file_downloaded',
+  'deposit_request_completed_by_client',
+  'deposit_request_validated',
+  'deposit_request_expired',
+] as const;
+
+export type ActivityEventType = (typeof ACTIVITY_EVENT_TYPES)[number];
 
 export type ActivityActor =
   | { kind: 'lawyer'; user_id: string }

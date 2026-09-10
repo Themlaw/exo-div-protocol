@@ -78,6 +78,23 @@ describe('Client d API', () => {
     expect(failure.blocking_file_status).toBe('infected');
   });
 
+  it('remonte toutes les violations d un formulaire refuse', async () => {
+    // Le backend rend la liste complete a dessein : l'afficher entiere permet a
+    // l'avocat de corriger ses dix documents en une passe.
+    fetch_spy.mockResolvedValue(
+      json_response(400, {
+        violations: ['title_missing', 'expected_document_label_missing'],
+      }),
+    );
+
+    const failure: ApiFailure = await expect_api_failure(
+      request_api('/requests', { method: 'POST' }),
+    );
+
+    expect(failure.kind).toBe('rejected_payload');
+    expect(failure.violations).toEqual(['title_missing', 'expected_document_label_missing']);
+  });
+
   it('survit a un corps d erreur qui n est pas du JSON', async () => {
     // Un 502 rendu par le mandataire arrive en HTML : le client ne doit pas
     // remplacer l'erreur du serveur par une erreur d'analyse.

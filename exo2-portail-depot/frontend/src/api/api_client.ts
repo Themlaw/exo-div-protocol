@@ -9,6 +9,7 @@ export const API_BASE_PATH = '/api/v1';
 // « une erreur est survenue » ferait chercher une panne de reseau a qui a
 // simplement suivi un vieux lien.
 export type ApiFailureKind =
+  | 'rejected_payload'
   | 'unauthenticated'
   | 'not_found'
   | 'file_not_downloadable'
@@ -19,17 +20,23 @@ export class ApiFailure extends Error {
   readonly kind: ApiFailureKind;
   readonly http_status: number | null;
   readonly blocking_file_status: DepositedFileStatus | null;
+  // Les violations nommees d'un formulaire refuse. Le backend les rend TOUTES
+  // d'un coup, a dessein : l'avocat qui decrit dix documents corrige en une
+  // passe au lieu de decouvrir ses erreurs une par une.
+  readonly violations: readonly string[];
 
   constructor(details: {
     kind: ApiFailureKind;
     http_status: number | null;
     blocking_file_status?: DepositedFileStatus | null;
+    violations?: readonly string[];
   }) {
     super(details.kind);
     this.name = 'ApiFailure';
     this.kind = details.kind;
     this.http_status = details.http_status;
     this.blocking_file_status = details.blocking_file_status ?? null;
+    this.violations = details.violations ?? [];
   }
 }
 
@@ -79,6 +86,14 @@ async function read_api_failure(response: Response): Promise<ApiFailure> {
     return new ApiFailure({ kind: 'not_found', http_status: 404 });
   }
 
+  if (response.status === 400) {
+    return new ApiFailure({
+      kind: 'rejected_payload',
+      http_status: 400,
+      violations: read_violations(await read_error_body(response)),
+    });
+  }
+
   if (response.status === 409) {
     return new ApiFailure({
       kind: 'file_not_downloadable',
@@ -99,6 +114,22 @@ async function read_error_body(response: Response): Promise<unknown> {
   } catch {
     return null;
   }
+}
+
+function read_violations(body: unknown): readonly string[] {
+  if (typeof body !== 'object' || body === null || !('violations' in body)) {
+    return [];
+  }
+
+  const announced_violations: unknown = (body as { violations: unknown }).violations;
+
+  if (!Array.isArray(announced_violations)) {
+    return [];
+  }
+
+  return announced_violations.filter(
+    (violation: unknown): violation is string => typeof violation === 'string',
+  );
 }
 
 function read_blocking_file_status(body: unknown): DepositedFileStatus | null {

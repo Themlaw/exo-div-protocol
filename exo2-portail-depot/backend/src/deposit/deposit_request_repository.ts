@@ -41,6 +41,10 @@ export interface DepositRequestDetail {
   status: DepositRequestStatus;
   security_policy: SecurityPolicy;
   created_at: Date;
+  // La MEME donnee que dans l'apercu, et pour la meme raison : c'est elle qui
+  // dit a l'avocat s'il doit regenerer. L'URL du lien, elle, n'y sera jamais —
+  // le token n'est stocke qu'en HMAC, le serveur est incapable de le redire.
+  link_expires_at: Date | null;
   expected_documents: LawyerExpectedDocumentView[];
 }
 
@@ -271,6 +275,7 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
         pin_length: found.pin_length,
       },
       created_at: found.created_at,
+      link_expires_at: (await this.read_current_link_expiries([found.id])).get(found.id) ?? null,
       expected_documents: build_lawyer_expected_document_views(
         documents,
         await this.deposited_files.list_for_deposit_request(found.id),

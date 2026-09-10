@@ -60,20 +60,3 @@ export function ResourceStates({
 
   return <>{children}</>;
 }
-
-export function resource_state_of<Item>(query: {
-  isPending: boolean;
-  isError: boolean;
-  data: Item | undefined;
-  is_empty: (data: Item) => boolean;
-}): ResourceState {
-  if (query.isPending) {
-    return 'loading';
-  }
-
-  if (query.isError || query.data === undefined) {
-    return 'error';
-  }
-
-  return query.is_empty(query.data) ? 'empty' : 'ready';
-}

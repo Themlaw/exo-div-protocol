@@ -237,6 +237,37 @@ describe('Remise du lien et du PIN', () => {
     expect(overview_after_revocation?.link_expires_at).toBeNull();
   });
 
+  it("le dashboard d'une demande annonce la meme echeance que la liste", async () => {
+    const created = await create_request_with_link();
+
+    const detail = await request(app.getHttpServer())
+      .get(`${DEPOSIT_REQUESTS_PATH}/${created.id}`)
+      .set('Cookie', lawyer_cookie)
+      .expect(200);
+
+    // L'URL du lien n'y figure pas et n'y figurera jamais : le token n'est
+    // stocke qu'en HMAC, le serveur est incapable de le redire. L'echeance, en
+    // revanche, est ce qui dit a l'avocat s'il doit regenerer.
+    expect((detail.body as { link_expires_at: string | null }).link_expires_at).toBe(
+      created.access_link.expires_at,
+    );
+    expect(JSON.stringify(detail.body)).not.toContain(created.access_link.pin);
+
+    await request(app.getHttpServer())
+      .delete(`${DEPOSIT_REQUESTS_PATH}/${created.id}/links/current`)
+      .set('Cookie', lawyer_cookie)
+      .expect(204);
+
+    const detail_after_revocation = await request(app.getHttpServer())
+      .get(`${DEPOSIT_REQUESTS_PATH}/${created.id}`)
+      .set('Cookie', lawyer_cookie)
+      .expect(200);
+
+    expect(
+      (detail_after_revocation.body as { link_expires_at: string | null }).link_expires_at,
+    ).toBeNull();
+  });
+
   // [61][62] Les journaux sont lus par plus de monde que la base, et gardes
   // plus longtemps : un PIN qui y passe une fois y reste.
   it('ni le token ni le PIN n apparaissent dans les journaux', async () => {

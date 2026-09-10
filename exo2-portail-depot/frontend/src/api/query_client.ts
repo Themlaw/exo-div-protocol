@@ -2,7 +2,7 @@ import { QueryClient } from '@tanstack/react-query';
 
 import { ApiFailure } from './api_client';
 
-// Rejouer un 401, un 404 ou un 409 ne change rien a la reponse : cela ne fait
+// Rejouer un 400, un 401, un 404 ou un 409 ne change rien a la reponse : cela ne fait
 // que retarder de plusieurs secondes le message que l'avocat doit lire. Seule
 // une panne de transport merite d'etre retentee.
 const RETRYABLE_FAILURE_KINDS: readonly string[] = ['network_unavailable', 'unexpected'];

@@ -3,7 +3,10 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { DepositRequestDashboardScreen } from '../../src/screens/deposit_request_dashboard';
-import { LAWYER_DEPOSIT_REQUEST_PATH } from '../../src/routing/front_routes';
+import {
+  LAWYER_DEPOSIT_REQUESTS_PATH,
+  LAWYER_DEPOSIT_REQUEST_PATH,
+} from '../../src/routing/front_routes';
 import {
   ACTIVITY_EVENT_TYPES,
   type ActivityEventType,
@@ -89,6 +92,16 @@ describe('Dashboard d une demande', () => {
     fetch_spy.mockReset();
     open_window.mockReset();
     vi.unstubAllGlobals();
+  });
+
+  // Sans ce retour, le dashboard etait un cul-de-sac : l'avocat n'avait que le
+  // bouton « precedent » du navigateur pour revenir a ses demandes.
+  it('offre un retour vers la liste des demandes', async () => {
+    render_dashboard();
+
+    const back_link: HTMLElement = await screen.findByRole('link', { name: 'Mes demandes' });
+
+    expect(back_link).toHaveAttribute('href', LAWYER_DEPOSIT_REQUESTS_PATH);
   });
 
   it('donne a chaque document attendu son etat', async () => {

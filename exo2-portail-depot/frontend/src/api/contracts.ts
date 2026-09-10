@@ -36,6 +36,25 @@ export interface SecurityPolicy {
   pin_length: number;
 }
 
+// Les seules valeurs de ce fichier qui ne DECRIVENT pas une reponse : elles
+// arment le formulaire de creation. Elles sont recopiees du domaine backend
+// plutot qu'importees — le front n'embarque aucune ligne de Nest — et
+// `test/api/security_policy_drift.spec.ts` echoue si la copie derive.
+//
+// Elles ne remplacent pas la validation serveur, elles l'annoncent : un
+// parametre de securite regle par le client est un parametre absent.
+export const DEFAULT_SECURITY_POLICY: SecurityPolicy = {
+  max_pin_attempts: 10,
+  link_lifetime_days: 7,
+  pin_length: 6,
+};
+
+export const SECURITY_POLICY_BOUNDS = {
+  max_pin_attempts: { min: 5, max: 20 },
+  link_lifetime_days: { min: 1, max: 14 },
+  pin_length: { min: 4, max: 12 },
+} as const;
+
 export interface DepositRequestActivitySummary {
   has_problem: boolean;
   infected_count: number;

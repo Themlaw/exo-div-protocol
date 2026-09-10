@@ -21,14 +21,14 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
 
-    // Le test de derive importe les types du backend, qui portent des
-    // decorateurs Nest. Sans ces deux drapeaux, tsc refuse d'analyser ces
-    // fichiers et le test ne compile meme pas.
+    // Les tests de derive importent des sources du backend, dont certaines
+    // portent des decorateurs Nest. Sans ces deux drapeaux, tsc refuse
+    // d'analyser ces fichiers et les tests ne compilent meme pas.
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true
   },
   "include": ["src", "test", "vite.config.ts"],
-  // Verifie par `tsconfig.contracts.json`, avec la rigueur du backend plutot
-  // que celle du front : c'est le seul fichier qui lit les deux projets.
-  "exclude": ["test/api/contracts_drift.spec.ts"]
+  // Verifies par `tsconfig.contracts.json`, avec la rigueur du backend plutot
+  // que celle du front : ce sont les seuls fichiers qui lisent les deux projets.
+  "exclude": ["test/api/contracts_drift.spec.ts", "test/api/security_policy_drift.spec.ts"]
 }

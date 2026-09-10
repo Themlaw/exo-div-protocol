@@ -3,7 +3,12 @@ import { Flex, Heading, Stack, Text, chakra } from '@chakra-ui/react';
 import { useNavigate, type NavigateFunction } from 'react-router-dom';
 
 import { ApiFailure } from '../api/api_client';
-import type { AccessLinkDelivery } from '../api/contracts';
+import {
+  DEFAULT_SECURITY_POLICY,
+  SECURITY_POLICY_BOUNDS,
+  type AccessLinkDelivery,
+  type SecurityPolicy,
+} from '../api/contracts';
 import {
   use_create_deposit_request,
   type DepositRequestCreationBody,
@@ -35,6 +40,31 @@ interface ExpectedDocumentDraft {
   readonly max_size_megabytes: number;
 }
 
+// Un champ par reglage, et son intitule dans les mots de l'avocat : « essais de
+// code » plutot que `max_pin_attempts`. L'ordre suit ce qu'il decide en premier
+// — combien de temps le lien vit, puis a quel point le code est difficile.
+const SECURITY_POLICY_FIELDS: readonly {
+  readonly key: keyof SecurityPolicy;
+  readonly label: string;
+  readonly explanation: string;
+}[] = [
+  {
+    key: 'link_lifetime_days',
+    label: 'Duree de validite du lien (jours)',
+    explanation: `Entre ${String(SECURITY_POLICY_BOUNDS.link_lifetime_days.min)} et ${String(SECURITY_POLICY_BOUNDS.link_lifetime_days.max)} jours. Passe ce delai, le client ne peut plus rien deposer.`,
+  },
+  {
+    key: 'pin_length',
+    label: 'Longueur du code d acces (chiffres)',
+    explanation: `Entre ${String(SECURITY_POLICY_BOUNDS.pin_length.min)} et ${String(SECURITY_POLICY_BOUNDS.pin_length.max)} chiffres. Un code plus long est plus sur, et plus penible a dicter.`,
+  },
+  {
+    key: 'max_pin_attempts',
+    label: 'Essais de code autorises',
+    explanation: `Entre ${String(SECURITY_POLICY_BOUNDS.max_pin_attempts.min)} et ${String(SECURITY_POLICY_BOUNDS.max_pin_attempts.max)} essais. Au dela, le lien se bloque et il faut le regenerer.`,
+  },
+];
+
 function empty_expected_document(local_key: string): ExpectedDocumentDraft {
   return {
     local_key,
@@ -50,6 +80,11 @@ export function NewDepositRequestScreen(): ReactElement {
   const [drafts, set_drafts] = useState<readonly ExpectedDocumentDraft[]>([
     empty_expected_document('document-1'),
   ]);
+  // La politique part sur les valeurs du domaine : l'avocat qui n'y touche pas
+  // doit obtenir exactement le comportement d'avant, sans avoir a le savoir.
+  const [security_policy, set_security_policy] = useState<SecurityPolicy>({
+    ...DEFAULT_SECURITY_POLICY,
+  });
   const [created, set_created] = useState<DepositRequestCreationResult | null>(null);
   const creation = use_create_deposit_request();
 
@@ -82,7 +117,7 @@ export function NewDepositRequestScreen(): ReactElement {
   function submit_creation(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
 
-    creation.mutate(to_creation_body(title, drafts), {
+    creation.mutate(to_creation_body(title, drafts, security_policy), {
       onSuccess: (result: DepositRequestCreationResult): void => {
         set_created(result);
       },
@@ -110,6 +145,13 @@ export function NewDepositRequestScreen(): ReactElement {
             ))}
           </Stack>
 
+          <SecurityPolicyFieldset
+            security_policy={security_policy}
+            on_change={(setting: keyof SecurityPolicy, value: number): void =>
+              set_security_policy((current: SecurityPolicy) => ({ ...current, [setting]: value }))
+            }
+          />
+
           <Flex justifyContent="space-between" gap="4" wrap="wrap">
             <SecondaryButton onClick={add_expected_document}>Ajouter un document</SecondaryButton>
             <PrimaryButton type="submit" disabled={creation.isPending}>
@@ -131,6 +173,37 @@ export function NewDepositRequestScreen(): ReactElement {
         />
       )}
     </Stack>
+  );
+}
+
+function SecurityPolicyFieldset({
+  security_policy,
+  on_change,
+}: {
+  readonly security_policy: SecurityPolicy;
+  readonly on_change: (setting: keyof SecurityPolicy, value: number) => void;
+}): ReactElement {
+  return (
+    <DivCard as="fieldset" role="group" aria-label="Politique de securite">
+      <Stack gap="4">
+        <Text fontWeight="heading">Politique de securite</Text>
+
+        {SECURITY_POLICY_FIELDS.map((field) => (
+          <Stack key={field.key} gap="1">
+            <TextField
+              label={field.label}
+              type="number"
+              bounds={SECURITY_POLICY_BOUNDS[field.key]}
+              value={String(security_policy[field.key])}
+              on_change={(raw: string) => on_change(field.key, read_whole_number(raw))}
+            />
+            <Text color="gray.default" fontSize="sm">
+              {field.explanation}
+            </Text>
+          </Stack>
+        ))}
+      </Stack>
+    </DivCard>
   );
 }
 
@@ -200,7 +273,7 @@ function ExpectedDocumentFieldset({
           type="number"
           value={String(draft.max_size_megabytes)}
           on_change={(raw: string) =>
-            on_change({ max_size_megabytes: read_megabytes(raw) })
+            on_change({ max_size_megabytes: read_whole_number(raw) })
           }
         />
       </Stack>
@@ -236,7 +309,11 @@ function toggle_mime_type(
     : [...allowed_mime_types, mime_type];
 }
 
-function read_megabytes(raw: string): number {
+// Un champ vide rend 0 plutot que NaN : `NaN` traverse `JSON.stringify` en
+// `null` et le backend repondrait « formulaire illisible » la ou l'avocat a
+// simplement efface son champ. A 0, il lit « hors des bornes autorisees », qui
+// designe le champ fautif.
+function read_whole_number(raw: string): number {
   const parsed: number = Number.parseInt(raw, 10);
 
   return Number.isSafeInteger(parsed) ? parsed : 0;
@@ -245,9 +322,11 @@ function read_megabytes(raw: string): number {
 function to_creation_body(
   title: string,
   drafts: readonly ExpectedDocumentDraft[],
+  security_policy: SecurityPolicy,
 ): DepositRequestCreationBody {
   return {
     title: title.trim(),
+    security_policy,
     expected_documents: drafts.map((draft: ExpectedDocumentDraft, index: number) => ({
       label: draft.label.trim(),
       position: index + 1,

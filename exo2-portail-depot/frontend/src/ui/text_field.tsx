@@ -8,6 +8,10 @@ export interface TextFieldProps {
   readonly type?: 'text' | 'email' | 'password' | 'number';
   readonly is_disabled?: boolean;
   readonly error_message?: string | undefined;
+  // Portees par le champ NUMERIQUE lui-meme, et pas seulement verifiees au
+  // retour du serveur : elles arment les fleches du champ et disent la plage
+  // avant la saisie. Le serveur revalide de toute facon.
+  readonly bounds?: { readonly min: number; readonly max: number };
 }
 
 export function TextField({
@@ -17,6 +21,7 @@ export function TextField({
   type = 'text',
   is_disabled = false,
   error_message,
+  bounds,
 }: TextFieldProps): ReactElement {
   const recipe = useRecipe({ key: 'textField' });
   // Le `label` est LIE au champ, jamais seulement pose a cote : c'est la seule
@@ -34,6 +39,8 @@ export function TextField({
         id={field_id}
         css={recipe()}
         type={type}
+        min={bounds?.min}
+        max={bounds?.max}
         value={value}
         disabled={is_disabled}
         aria-invalid={error_message !== undefined}

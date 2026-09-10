@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from 'react';
-import { Flex, Heading, Stack, Text, chakra } from '@chakra-ui/react';
-import { useParams } from 'react-router-dom';
+import { Flex, Heading, Stack, Text, chakra, useRecipe } from '@chakra-ui/react';
+import { Link, useParams } from 'react-router-dom';
 
 import { ApiFailure } from '../api/api_client';
 import type {
@@ -18,6 +18,7 @@ import {
   use_regenerate_access_link,
   use_revoke_access_link,
 } from '../api/lawyer_queries';
+import { LAWYER_DEPOSIT_REQUESTS_PATH } from '../routing/front_routes';
 import { activity_actor_label, activity_event_label } from '../ui/activity_labels';
 import { PrimaryButton, SecondaryButton } from '../ui/div_button';
 import { DivCard } from '../ui/div_card';
@@ -39,6 +40,8 @@ export function DepositRequestDashboardScreen(): ReactElement {
 
   return (
     <Stack gap="8" maxWidth="60rem" marginX="auto" paddingY="10" paddingX="4">
+      <BackToDepositRequestsLink />
+
       <LawyerResource
         query={detail}
         loading_label="Chargement de la demande"
@@ -55,6 +58,29 @@ export function DepositRequestDashboardScreen(): ReactElement {
         )}
       </LawyerResource>
     </Stack>
+  );
+}
+
+// Pose AU-DESSUS de la ressource, et non dans son rendu charge : c'est quand la
+// demande ne se charge pas que le cul-de-sac fait le plus mal, et un retour qui
+// n'existe que sur le cas nominal ne serait pas un retour.
+function BackToDepositRequestsLink(): ReactElement {
+  const recipe = useRecipe({ key: 'backLink' });
+
+  return (
+    <Flex>
+      <Link to={LAWYER_DEPOSIT_REQUESTS_PATH}>
+        <chakra.span css={recipe()}>
+          {/* La fleche est DECORATIVE : lue, elle polluerait le nom accessible
+              du lien, qui doit rester exactement le titre de la page visee.
+              Ecrite en echappement JS et non en entite HTML numerique : une
+              telle entite a la forme d'une couleur crue, et le balayage
+              lexical du theme la refuserait. */}
+          <chakra.span aria-hidden="true">{'\u2190'}</chakra.span>
+          Mes demandes
+        </chakra.span>
+      </Link>
+    </Flex>
   );
 }
 

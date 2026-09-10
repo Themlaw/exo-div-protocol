@@ -164,6 +164,86 @@ export const drop_zone_recipe = defineRecipe({
   },
 });
 
+// Le bouton de copie de la popup de delivrance. Il n'est pas un bouton
+// secondaire de plus : c'est le SEUL geste qui sauve un code que le serveur ne
+// sait plus redire, et son resultat doit donc rester lisible plusieurs secondes
+// apres le clic. L'etat vit dans une variante du theme parce qu'un vert ecrit a
+// la main dans un ecran serait une couleur hors DA.
+export const copy_button_recipe = defineRecipe({
+  base: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    fontWeight: 'heading',
+    fontSize: 'md',
+    lineHeight: '1.2',
+    paddingInline: '24px',
+    paddingBlock: '14px',
+    borderRadius: 'full',
+    cursor: 'pointer',
+    transition: 'background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease',
+    _focusVisible: {
+      outline: '2px solid',
+      outlineColor: 'primary',
+      outlineOffset: '2px',
+    },
+  },
+  variants: {
+    outcome: {
+      untouched: {
+        bg: 'surface',
+        color: 'primary',
+        boxShadow: PRIMARY_INSET_OUTLINE,
+        _hover: { bg: 'accent.surface' },
+        // Le seul endroit du theme ou l'enfoncement est dessine : sur ce
+        // bouton, l'avocat doit voir que son clic a ete pris, meme s'il relache
+        // avant que le presse-papier ait repondu.
+        _active: { bg: 'accent.soft' },
+      },
+      copied: {
+        bg: 'success.bg',
+        color: 'success.fg',
+        boxShadow: 'none',
+        // Pas de survol qui rende le vert : l'etat tient QUELQUES SECONDES et
+        // le curseur est encore dessus. Le laisser reagir au hover ferait
+        // clignoter la confirmation que l'on vient d'afficher.
+        _hover: { bg: 'success.bg' },
+      },
+      failed: {
+        bg: 'danger.bg',
+        color: 'danger.fg',
+        boxShadow: 'none',
+        _hover: { bg: 'danger.bg' },
+      },
+    },
+  },
+  defaultVariants: { outcome: 'untouched' },
+});
+
+// Le retour d'un ecran de detail vers sa liste. Sobre par decision : c'est un
+// fil d'ariane, pas une barre de navigation — il ne doit jamais concurrencer du
+// regard le titre du dossier qu'il surmonte.
+export const back_link_recipe = defineRecipe({
+  base: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '8px',
+    color: 'gray.default',
+    fontSize: 'sm',
+    fontWeight: 'heading',
+    textDecoration: 'none',
+    transition: 'color 0.18s ease',
+    _hover: { color: 'primary', textDecoration: 'underline' },
+    _focusVisible: {
+      outline: '2px solid',
+      outlineColor: 'primary',
+      outlineOffset: '2px',
+      borderRadius: 'sm',
+    },
+  },
+});
+
 // « Lien genere : monospace, tronque, action Copier a droite. »
 export const generated_link_recipe = defineRecipe({
   base: {
@@ -186,6 +266,8 @@ export const DIV_RECIPES = {
   secondaryButton: secondary_button_recipe,
   card: card_recipe,
   statusPill: status_pill_recipe,
+  copyButton: copy_button_recipe,
+  backLink: back_link_recipe,
   textField: text_field_recipe,
   dropZone: drop_zone_recipe,
   generatedLink: generated_link_recipe,

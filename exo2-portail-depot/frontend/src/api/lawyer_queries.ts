@@ -14,6 +14,7 @@ import type {
   DepositRequestOverview,
   LawyerActivityPage,
   PresignedDownloadTicket,
+  SecurityPolicy,
 } from './contracts';
 
 // Les clefs sont hierarchiques — ['requests'], ['requests', id], ['requests',
@@ -71,6 +72,10 @@ export interface DepositRequestCreationBody {
     readonly allowed_mime_types: readonly string[];
     readonly max_size_bytes: number;
   }[];
+  // Facultative cote backend, TOUJOURS envoyee ici : le formulaire montre a
+  // l'avocat les trois valeurs qui partiront, et omettre le champ ferait
+  // dependre le resultat d'un defaut qu'il ne voit pas.
+  readonly security_policy: SecurityPolicy;
 }
 
 export interface DepositRequestCreationResult {

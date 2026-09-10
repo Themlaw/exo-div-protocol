@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import { useCallback, useState, type ReactElement } from 'react';
 import { Stack } from '@chakra-ui/react';
 import { useParams } from 'react-router-dom';
 
@@ -15,7 +15,24 @@ import { ResourceStates } from '../ui/resource_states';
 export function ClientDepositScreen(): ReactElement {
   const { token } = useParams<{ token: string }>();
   const link_token: string = token ?? '';
-  const board = use_client_deposit_board(link_token);
+  // Les emplacements dont les octets sont partis vers MinIO mais que le serveur
+  // ne compte pas encore. Ils ne se lisent nulle part dans la reponse — le
+  // webhook ne les a pas encore fait exister — et c'est pourtant pendant CE
+  // moment-la que le tableau doit etre relu.
+  const [slots_awaiting_arrival, set_slots_awaiting_arrival] = useState<readonly string[]>([]);
+  const board = use_client_deposit_board(link_token, slots_awaiting_arrival.length > 0);
+
+  const mark_slot_as_awaiting_arrival = useCallback((expected_document_id: string): void => {
+    set_slots_awaiting_arrival((current: readonly string[]) =>
+      current.includes(expected_document_id) ? current : [...current, expected_document_id],
+    );
+  }, []);
+
+  const forget_slot_awaiting_arrival = useCallback((expected_document_id: string): void => {
+    set_slots_awaiting_arrival((current: readonly string[]) =>
+      current.filter((awaiting: string) => awaiting !== expected_document_id),
+    );
+  }, []);
 
   if (board.error instanceof ApiFailure && board.error.kind === 'unauthenticated') {
     return <ClientLinkGate token={link_token} />;
@@ -34,7 +51,12 @@ export function ClientDepositScreen(): ReactElement {
         empty_call_to_action={null}
       >
         {board.data === undefined ? null : (
-          <ClientDepositBoard token={link_token} board={board.data} />
+          <ClientDepositBoard
+            token={link_token}
+            board={board.data}
+            on_upload_finished={mark_slot_as_awaiting_arrival}
+            on_arrival_observed={forget_slot_awaiting_arrival}
+          />
         )}
       </ResourceStates>
     </Stack>

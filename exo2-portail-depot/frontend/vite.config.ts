@@ -26,5 +26,9 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],
     include: ['test/**/*.spec.ts', 'test/**/*.spec.tsx'],
+    // Les scenarios Playwright vivent sous `test/` comme tout le reste, mais ils
+    // parlent a un vrai navigateur : lances par Vitest, ils echoueraient sur
+    // l'absence de `@playwright/test`.
+    exclude: ['test/e2e/**'],
   },
 });

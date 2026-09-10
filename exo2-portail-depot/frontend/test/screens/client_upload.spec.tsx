@@ -136,6 +136,29 @@ describe('Envoi d une piece par le client', () => {
     );
   });
 
+  it('dit que la reception est en cours tant que le serveur ne compte pas la piece', async () => {
+    stub_client_deposit_api();
+    const uploads: CapturedUpload[] = stub_xml_http_request();
+
+    render_client_deposit();
+    const slot: HTMLElement = await choose_a_file_for_the_identity_slot(a_pdf_named('cni.pdf'));
+    await userEvent.click(within(slot).getByRole('button', { name: "Envoyer Piece d'identite" }));
+    await waitFor(() => {
+      expect(uploads).toHaveLength(1);
+    });
+
+    act(() => {
+      (uploads[0] as CapturedUpload).finish(204);
+    });
+
+    // Les octets sont partis, mais l'emplacement reste VIDE aux yeux du serveur
+    // tant que le webhook MinIO n'a pas transforme la piece en occupante. Sans
+    // ce message, le client croit son envoi perdu et recommence.
+    expect(await within(slot).findByRole('status')).toHaveTextContent(
+      'Envoi termine. Reception de la piece en cours',
+    );
+  });
+
   it('garde l echec sur le seul emplacement concerne', async () => {
     stub_client_deposit_api({
       upload_authorization: json_response(409, { message: 'Emplacement occupe' }),

@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type ReactElement } from 'react';
+import { useEffect, useState, type ChangeEvent, type ReactElement } from 'react';
 import { Flex, Heading, Stack, Text, chakra } from '@chakra-ui/react';
 
 import { ApiFailure } from '../api/api_client';
@@ -26,9 +26,16 @@ import { ConfirmationDialog } from './confirmation_dialog';
 export interface ClientDepositBoardProps {
   readonly token: string;
   readonly board: ClientDepositBoardView;
+  readonly on_upload_finished: (expected_document_id: string) => void;
+  readonly on_arrival_observed: (expected_document_id: string) => void;
 }
 
-export function ClientDepositBoard({ token, board }: ClientDepositBoardProps): ReactElement {
+export function ClientDepositBoard({
+  token,
+  board,
+  on_upload_finished,
+  on_arrival_observed,
+}: ClientDepositBoardProps): ReactElement {
   // Une fois la demande partie en traitement, elle appartient au dossier de
   // l'avocat : plus rien ne s'ajoute ni ne se retire, sinon ce qu'il examine
   // changerait sous ses yeux.
@@ -56,6 +63,8 @@ export function ClientDepositBoard({ token, board }: ClientDepositBoardProps): R
             token={token}
             expected={expected}
             is_frozen={is_frozen}
+            on_upload_finished={on_upload_finished}
+            on_arrival_observed={on_arrival_observed}
           />
         ))}
       </chakra.ul>
@@ -69,10 +78,14 @@ function DepositSlot({
   token,
   expected,
   is_frozen,
+  on_upload_finished,
+  on_arrival_observed,
 }: {
   readonly token: string;
   readonly expected: ClientExpectedDocumentView;
   readonly is_frozen: boolean;
+  readonly on_upload_finished: (expected_document_id: string) => void;
+  readonly on_arrival_observed: (expected_document_id: string) => void;
 }): ReactElement {
   const [chosen_file, set_chosen_file] = useState<File | null>(null);
   const [progress, set_progress] = useState<UploadProgress | null>(null);
@@ -80,12 +93,21 @@ function DepositSlot({
     null,
   );
   const [is_confirming_removal, set_is_confirming_removal] = useState<boolean>(false);
+  const [has_finished_its_upload, set_has_finished_its_upload] = useState<boolean>(false);
   // Une autorisation PAR EMPLACEMENT : un echec sur une piece ne doit rien dire
   // des autres, et un etat partage ferait clignoter le message sur la mauvaise
   // ligne.
   const authorization = use_authorize_upload(token);
   const removal = use_remove_deposited_file(token);
   const deposited = expected.deposited_file;
+  const is_awaiting_arrival: boolean = has_finished_its_upload && deposited === null;
+
+  useEffect((): void => {
+    if (has_finished_its_upload && deposited !== null) {
+      set_has_finished_its_upload(false);
+      on_arrival_observed(expected.id);
+    }
+  }, [has_finished_its_upload, deposited, expected.id, on_arrival_observed]);
 
   async function send_the_chosen_file(): Promise<void> {
     if (chosen_file === null) {
@@ -105,6 +127,11 @@ function DepositSlot({
 
       await upload_to_object_storage({ ticket, file: chosen_file, on_progress: set_progress });
       set_chosen_file(null);
+      // Les octets sont partis, et pourtant l'emplacement est encore vide aux
+      // yeux du serveur : il ne comptera la piece qu'au passage du webhook. Le
+      // dire au client evite qu'il croie son envoi perdu et recommence.
+      set_has_finished_its_upload(true);
+      on_upload_finished(expected.id);
     } catch (failure: unknown) {
       set_progress(null);
 
@@ -153,6 +180,10 @@ function DepositSlot({
           )}
 
           {progress === null ? null : <UploadProgressBar progress={progress} />}
+
+          {is_awaiting_arrival ? (
+            <Text role="status">Envoi termine. Reception de la piece en cours…</Text>
+          ) : null}
 
           <SlotFailure
             authorization_failure={authorization.error}

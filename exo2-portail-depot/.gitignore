@@ -6,3 +6,7 @@ coverage/
 data/
 *.tsbuildinfo
 exo_div.pdf
+
+# Artefacts d'execution de Playwright : traces, captures et rapport HTML.
+test-results/
+playwright-report/

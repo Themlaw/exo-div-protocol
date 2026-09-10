@@ -39,16 +39,33 @@ const UNSETTLED_BOARD_REFETCH_INTERVAL_MS = 3_000;
 
 export function use_client_deposit_board(
   token: string,
+  is_awaiting_an_arrival: boolean = false,
 ): UseQueryResult<ClientDepositBoardView, ApiFailure> {
   return useQuery<ClientDepositBoardView, ApiFailure>({
     queryKey: CLIENT_QUERY_KEYS.deposit_board(token),
     queryFn: (): Promise<ClientDepositBoardView> =>
       request_api<ClientDepositBoardView>(`/public/${token}/documents`),
     refetchInterval: (query): number | false =>
-      query.state.data !== undefined && has_unsettled_document(query.state.data)
+      should_poll_deposit_board(query.state.data, is_awaiting_an_arrival)
         ? UNSETTLED_BOARD_REFETCH_INTERVAL_MS
         : false,
   });
+}
+
+// Deux raisons de continuer a relire, et la premiere n'est PAS visible dans les
+// donnees : une piece dont les octets viennent de partir vers MinIO n'occupe pas
+// encore son emplacement — le serveur ne la comptera qu'au passage du webhook,
+// et le tableau la montre donc vide. S'en remettre au seul contenu de la reponse
+// arreterait le rafraichissement exactement quand il sert.
+export function should_poll_deposit_board(
+  board: ClientDepositBoardView | undefined,
+  is_awaiting_an_arrival: boolean,
+): boolean {
+  if (is_awaiting_an_arrival) {
+    return true;
+  }
+
+  return board !== undefined && has_unsettled_document(board);
 }
 
 export function has_unsettled_document(board: ClientDepositBoardView): boolean {

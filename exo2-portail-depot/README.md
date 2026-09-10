@@ -16,8 +16,37 @@ bord.
 | Mot de passe | `atelier balise carnet dossier facade` |
 
 Ce compte est amorcé au démarrage, avec **une demande déjà créée** — *Dossier de
-démonstration — succession Martin*, trois emplacements attendus. De quoi émettre
-un lien et le suivre sans rien avoir à préparer.
+démonstration — succession Martin*, trois emplacements attendus.
+
+**Côté client** — aucun compte, c'est le lien qui autorise
+
+| | |
+|---|---|
+| Lien | <https://titouan-constance.stage2-div.rayan-drissi.com/deposit/demoportaildivdepotpiecesdemo123> |
+| Code d'accès | `395174` |
+
+C'est le lien de la demande ci-dessus, émis au démarrage en même temps qu'elle.
+Ouvrez-le dans une fenêtre privée et gardez le compte avocat dans l'autre : on
+voit alors les deux côtés du produit en même temps, le dépôt d'un côté et le
+journal d'activité qui se remplit de l'autre.
+
+Ce couple est **fixe et public**, contrairement à tous les autres secrets, qui
+sont tirés au sort dans `.env`. C'est un choix assumé : un lien tiré au sort ne
+s'ouvrirait qu'avec une sortie de terminal que le lecteur de ce README n'a pas,
+et le parcours client — la moitié du sujet — deviendrait invisible sans passer
+d'abord par le compte avocat. Il n'ouvre qu'une demande vide, créée uniquement
+sur une base vierge, il est valable sept jours, et *Régénérer le lien* le
+remplace par un couple tiré au sort comme pour n'importe quelle demande.
+
+Le jeton respecte la forme d'un vrai jeton — 32 caractères alphanumériques,
+soit ~190 bits — et le code la longueur de la politique par défaut. Les deux
+sont vérifiés au démarrage : un couple que le déverrouillage refuserait fait
+échouer le lancement là où la cause est lisible, plutôt que sur l'écran d'un
+client. En base, ils sont stockés comme n'importe quels autres : empreinte HMAC
+poivrée pour le jeton, argon2id pour le code.
+
+`./install.sh` réaffiche ce lien et ce code à la fin de son exécution, avec
+l'adresse réelle de la machine sur laquelle il tourne.
 
 **Grafana** — <https://titouan-constance.stage2-div.rayan-drissi.com/grafana/>
 

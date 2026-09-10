@@ -3,6 +3,11 @@ import {
   type NodeEnvironment,
 } from '../shared/node_environment';
 import {
+  ACCESS_LINK_TOKEN_ALPHABET,
+  ACCESS_LINK_TOKEN_LENGTH,
+} from '../domain/presigned_upload';
+import { DEFAULT_SECURITY_POLICY } from '../domain/security_policy';
+import {
   find_lawyer_password_length_violation,
   has_lawyer_email_shape,
   is_lawyer_email_too_long,
@@ -24,6 +29,8 @@ export const ENVIRONMENT_VARIABLE_NAMES = {
   minio_root_password: 'MINIO_ROOT_PASSWORD',
   demo_lawyer_email: 'DEMO_LAWYER_EMAIL',
   demo_lawyer_password: 'DEMO_LAWYER_PASSWORD',
+  demo_access_link_token: 'DEMO_ACCESS_LINK_TOKEN',
+  demo_access_pin: 'DEMO_ACCESS_PIN',
   trusted_proxy_hop_count: 'TRUSTED_PROXY_HOP_COUNT',
   public_base_url: 'PUBLIC_BASE_URL',
   http_port: 'PORT',
@@ -73,6 +80,14 @@ export interface ApplicationEnvironment {
   minio_root_password: string;
   demo_lawyer_email: string;
   demo_lawyer_password: string;
+  // Le jeton et le code du lien de la demande de demonstration. Ils sont FIXES
+  // et publics — le README les imprime, `install.sh` les affiche — la ou une
+  // vraie emission les tire au sort. C'est le seul moyen d'ecrire dans un
+  // README un lien qui ouvre reellement quelque chose. Ils ne protegent qu'une
+  // demande vide creee sur une base vierge, et un avocat qui regenere le lien
+  // depuis l'interface les remplace par des secrets tires au sort.
+  demo_access_link_token: string;
+  demo_access_pin: string;
   // Nombre de relais de confiance a remonter dans X-Forwarded-For. Obligatoire
   // et non optionnel : c'est le parametre le plus sensible de la limitation par
   // adresse, et une valeur absente ou illisible ferait soit retomber
@@ -472,6 +487,24 @@ function uses_non_deliverable_email_domain(value: string): boolean {
   );
 }
 
+const DEMO_ACCESS_PIN_SHAPE = /^[0-9]+$/;
+
+function has_access_link_token_shape(candidate: string): boolean {
+  return (
+    candidate.length === ACCESS_LINK_TOKEN_LENGTH &&
+    [...candidate].every((character: string): boolean =>
+      ACCESS_LINK_TOKEN_ALPHABET.includes(character),
+    )
+  );
+}
+
+function has_demo_access_pin_shape(candidate: string): boolean {
+  return (
+    candidate.length === DEFAULT_SECURITY_POLICY.pin_length &&
+    DEMO_ACCESS_PIN_SHAPE.test(candidate)
+  );
+}
+
 export function parse_application_environment(
   raw_environment: Readonly<Record<string, string | undefined>>,
 ): ApplicationEnvironment {
@@ -531,6 +564,10 @@ export function parse_application_environment(
   const demo_lawyer_password = required_value(
     ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_password,
   );
+  const demo_access_link_token = required_value(
+    ENVIRONMENT_VARIABLE_NAMES.demo_access_link_token,
+  );
+  const demo_access_pin = required_value(ENVIRONMENT_VARIABLE_NAMES.demo_access_pin);
   const trusted_proxy_hop_count_raw = required_value(
     ENVIRONMENT_VARIABLE_NAMES.trusted_proxy_hop_count,
   );
@@ -639,6 +676,30 @@ export function parse_application_environment(
         reason: 'malformed',
       });
     }
+  }
+
+  // Les memes formes que celles qu'une vraie emission produit, verifiees ici
+  // plutot qu'a l'amorcage : un lien de demonstration que le deverrouillage
+  // refusera doit echouer au demarrage, ou la cause est lisible, et non
+  // plusieurs minutes plus tard sur l'ecran d'un client qui recopie le README.
+  if (
+    demo_access_link_token !== undefined &&
+    !has_access_link_token_shape(demo_access_link_token)
+  ) {
+    violations.push({
+      variable: ENVIRONMENT_VARIABLE_NAMES.demo_access_link_token,
+      reason: 'malformed',
+    });
+  }
+
+  // La longueur exigee est celle de la politique PAR DEFAUT parce que c'est
+  // celle que porte le lien seede : `verify_client_pin` rejetterait tout autre
+  // longueur pour `pin_length_mismatch`.
+  if (demo_access_pin !== undefined && !has_demo_access_pin_shape(demo_access_pin)) {
+    violations.push({
+      variable: ENVIRONMENT_VARIABLE_NAMES.demo_access_pin,
+      reason: 'malformed',
+    });
   }
 
   if (
@@ -810,6 +871,11 @@ export function parse_application_environment(
       ENVIRONMENT_VARIABLE_NAMES.demo_lawyer_password,
       demo_lawyer_password,
     ),
+    demo_access_link_token: resolved(
+      ENVIRONMENT_VARIABLE_NAMES.demo_access_link_token,
+      demo_access_link_token,
+    ),
+    demo_access_pin: resolved(ENVIRONMENT_VARIABLE_NAMES.demo_access_pin, demo_access_pin),
     trusted_proxy_hop_count: trusted_proxy_hop_count ?? 0,
     public_base_url: resolved(
       ENVIRONMENT_VARIABLE_NAMES.public_base_url,

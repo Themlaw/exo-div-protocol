@@ -22,8 +22,17 @@ import {
 } from './deposit_request_repository';
 import {
   bootstrap_demo_deposit_request,
+  type DemoAccessLinkRepository,
   type DemoDepositRequestBootstrapOutcome,
 } from './demo_deposit_request_bootstrap';
+import { ACCESS_LINK_REPOSITORY } from '../access_link/access_link_repository';
+import {
+  ACCESS_LINK_TOKEN_HASHER,
+  type AccessLinkTokenHasher,
+} from '../access_link/access_link_token_hasher';
+import { CLIENT_PIN_HASHER } from '../access_link/client_pin_hasher';
+import type { PinHasher } from '../domain/verify_client_pin';
+import { CLOCK, type Clock } from '../shared/clock';
 import { LAWYER_ACCOUNT_REPOSITORY } from '../auth/lawyer_auth.module';
 import type { LawyerAccountRepository } from '../auth/lawyer_account_bootstrap';
 import { APPLICATION_ENVIRONMENT } from '../config/configuration.module';
@@ -48,6 +57,12 @@ export class DemoDepositRequestBootstrapper implements OnApplicationBootstrap {
     private readonly lawyer_accounts: LawyerAccountRepository,
     @Inject(DEPOSIT_REQUEST_REPOSITORY)
     private readonly deposit_requests: DepositRequestRepository,
+    @Inject(ACCESS_LINK_REPOSITORY) private readonly access_links: DemoAccessLinkRepository,
+    @Inject(ACCESS_LINK_TOKEN_HASHER) private readonly token_hasher: AccessLinkTokenHasher,
+    @Inject(CLIENT_PIN_HASHER) private readonly pin_hasher: PinHasher,
+    @Inject(ACTIVITY_EVENT_REPOSITORY)
+    private readonly activity_events: ActivityEventRepository,
+    @Inject(CLOCK) private readonly clock: Clock,
     @Inject(APPLICATION_LOGGER) private readonly logger: ApplicationLogger,
   ) {}
 
@@ -65,15 +80,33 @@ export class DemoDepositRequestBootstrapper implements OnApplicationBootstrap {
     }
 
     const outcome: DemoDepositRequestBootstrapOutcome = await bootstrap_demo_deposit_request(
-      { owner_user_id },
-      { deposit_requests: this.deposit_requests },
+      {
+        owner_user_id,
+        access_link_seed: {
+          token: this.environment.demo_access_link_token,
+          pin: this.environment.demo_access_pin,
+        },
+      },
+      {
+        deposit_requests: this.deposit_requests,
+        access_links: this.access_links,
+        token_hasher: this.token_hasher,
+        pin_hasher: this.pin_hasher,
+        activity_events: this.activity_events,
+        clock: this.clock,
+      },
     );
 
+    // Ni le jeton ni le code n'apparaissent dans ce journal, bien qu'ils soient
+    // publics : les journaux sont lus par plus de monde que la base, et une
+    // exception pour la demonstration deviendrait la regle le jour ou quelqu'un
+    // recopiera cette ligne pour une vraie emission.
     this.logger.info(
       DEPOSIT_LOG_CONTEXT,
       outcome.deposit_request_was_created
         ? 'demande de demonstration creee'
         : 'demande de demonstration non recreee : l avocat a deja des demandes',
+      { access_link_was_issued: outcome.access_link_was_issued },
     );
   }
 }

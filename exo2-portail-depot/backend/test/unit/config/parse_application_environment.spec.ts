@@ -17,6 +17,8 @@ import {
   type ApplicationEnvironment,
   type EnvironmentViolation,
 } from '../../../src/config/environment';
+import { ACCESS_LINK_TOKEN_LENGTH } from '../../../src/domain/presigned_upload';
+import { DEFAULT_SECURITY_POLICY } from '../../../src/domain/security_policy';
 
 const VALID_RAW_ENVIRONMENT: Readonly<Record<string, string>> = {
   NODE_ENV: 'production',
@@ -34,6 +36,8 @@ const VALID_RAW_ENVIRONMENT: Readonly<Record<string, string>> = {
   PUBLIC_BASE_URL: 'https://portail.cabinet-demonstration.fr',
   BETTER_AUTH_SECRET: 'a'.repeat(MINIMUM_LAWYER_AUTH_SECRET_LENGTH),
   DEMO_LAWYER_PASSWORD: 'cheval batterie agrafe correct girafe',
+  DEMO_ACCESS_LINK_TOKEN: 'a'.repeat(ACCESS_LINK_TOKEN_LENGTH),
+  DEMO_ACCESS_PIN: '4'.repeat(DEFAULT_SECURITY_POLICY.pin_length),
 };
 
 function raw_environment_without(
@@ -74,6 +78,8 @@ describe('parse_application_environment', () => {
       http_port: DEFAULT_HTTP_PORT,
       worker_metrics_port: DEFAULT_WORKER_METRICS_PORT,
       demo_lawyer_password: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_PASSWORD,
+      demo_access_link_token: VALID_RAW_ENVIRONMENT.DEMO_ACCESS_LINK_TOKEN,
+      demo_access_pin: VALID_RAW_ENVIRONMENT.DEMO_ACCESS_PIN,
     });
   });
 
@@ -899,5 +905,70 @@ describe('DEMO_LAWYER_EMAIL est normalise a la sortie du parsing', () => {
     });
 
     expect(application_environment.demo_lawyer_email).toBe('avocat@cabinet-demonstration.fr');
+  });
+});
+
+describe('le lien de demonstration publie', () => {
+  function violations_for(
+    overrides: Readonly<Record<string, string>>,
+  ): readonly EnvironmentViolation[] {
+    try {
+      parse_application_environment({ ...VALID_RAW_ENVIRONMENT, ...overrides });
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(InvalidEnvironmentError);
+      return (error as InvalidEnvironmentError).violations;
+    }
+    throw new Error('parse_application_environment aurait du lever');
+  }
+
+  // Ce couple est imprime dans le README et affiche par `install.sh`. Il est
+  // verifie ICI, au demarrage, et non a l'amorcage : un jeton ou un code que le
+  // deverrouillage refusera doit echouer la ou on peut relier la panne a sa
+  // cause, pas plusieurs minutes plus tard sur l'ecran d'un client.
+
+  it('refuse un jeton qui n a pas la longueur d un vrai jeton', () => {
+    // Un jeton plus court, c'est moins d'entropie sur le SEUL secret qui protege
+    // le depot. La demonstration ne doit pas montrer un lien plus faible que
+    // celui que le produit emet.
+    expect(
+      violations_for({ DEMO_ACCESS_LINK_TOKEN: 'a'.repeat(ACCESS_LINK_TOKEN_LENGTH - 1) }),
+    ).toContainEqual<EnvironmentViolation>({
+      variable: 'DEMO_ACCESS_LINK_TOKEN',
+      reason: 'malformed',
+    });
+  });
+
+  it('refuse un jeton portant un caractere hors de l alphabet des jetons', () => {
+    // Le jeton voyage dans une URL : un caractere a echapper serait recopie
+    // differemment par chaque client de messagerie.
+    expect(
+      violations_for({ DEMO_ACCESS_LINK_TOKEN: `${'a'.repeat(ACCESS_LINK_TOKEN_LENGTH - 1)}/` }),
+    ).toContainEqual<EnvironmentViolation>({
+      variable: 'DEMO_ACCESS_LINK_TOKEN',
+      reason: 'malformed',
+    });
+  });
+
+  it('refuse un code dont la longueur n est pas celle de la politique par defaut', () => {
+    // Le lien seede porte la politique par defaut. Un code d'une autre longueur
+    // serait rejete par `verify_client_pin` pour `pin_length_mismatch` : le lien
+    // publie n'ouvrirait jamais rien.
+    expect(
+      violations_for({ DEMO_ACCESS_PIN: '4'.repeat(DEFAULT_SECURITY_POLICY.pin_length + 1) }),
+    ).toContainEqual<EnvironmentViolation>({
+      variable: 'DEMO_ACCESS_PIN',
+      reason: 'malformed',
+    });
+  });
+
+  it('refuse un code qui n est pas fait que de chiffres', () => {
+    // L'ecran client est une suite de cases numeriques : une lettre n y est pas
+    // saisissable.
+    expect(
+      violations_for({ DEMO_ACCESS_PIN: `a${'4'.repeat(DEFAULT_SECURITY_POLICY.pin_length - 1)}` }),
+    ).toContainEqual<EnvironmentViolation>({
+      variable: 'DEMO_ACCESS_PIN',
+      reason: 'malformed',
+    });
   });
 });

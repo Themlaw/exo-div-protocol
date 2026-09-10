@@ -48,6 +48,12 @@ GRAFANA_ADMIN_PASSWORD="grafana-de-test-sans-valeur"
 DEMO_LAWYER_EMAIL="avocat@demo.local"
 DEMO_LAWYER_PASSWORD="action chemin bruit chalet affiche"
 
+# Volontairement DIFFERENTS de ceux du README : les parcours de bout en bout
+# emettent leurs propres liens et n'ont pas a dependre du couple publie, dont
+# un changement ne doit pas faire echouer la chaine de verification.
+DEMO_ACCESS_LINK_TOKEN="cicicicicicicicicicicicicicicici"
+DEMO_ACCESS_PIN="000000"
+
 # Aucun relais de confiance : les tests parlent directement au serveur, et
 # remonter un X-Forwarded-For inexistant ferait porter la limitation de cadence
 # sur une adresse choisie par l'appelant.

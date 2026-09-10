@@ -164,6 +164,17 @@ readonly ACME_STAGING_CA="https://acme-staging-v02.api.letsencrypt.org/directory
 readonly DEMO_LAWYER_EMAIL_DEFAULT="avocat@portail-div.fr"
 readonly DEMO_LAWYER_PASSWORD_DEFAULT="atelier balise carnet dossier facade"
 
+# Le lien de la demande de demonstration, publie pour la meme raison que le
+# compte : sans jeton ni code ecrits quelque part, on ne peut pas montrer le
+# parcours CLIENT, qui est pourtant la moitie du sujet — l'evaluateur devrait
+# d'abord se connecter en avocat pour s'emettre un lien a lui-meme.
+# Le jeton respecte la forme d'un vrai jeton (32 caracteres alphanumeriques) et
+# le code la longueur de la politique par defaut ; le backend refuse de demarrer
+# si ce n'est pas le cas. Ils n'ouvrent qu'une demande vide creee sur une base
+# vierge, et « Regenerer le lien » les remplace par des secrets tires au sort.
+readonly DEMO_ACCESS_LINK_TOKEN_DEFAULT="demoportaildivdepotpiecesdemo123"
+readonly DEMO_ACCESS_PIN_DEFAULT="395174"
+
 # Fixe pour la meme raison que le compte avocat : les tableaux de bord font
 # partie de ce qu'on demande de montrer, et un mot de passe tire au sort ne
 # s'ouvre qu'avec une sortie de terminal que l'evaluateur n'a plus.
@@ -190,6 +201,16 @@ if [[ -f "${ENVIRONMENT_FILE}" ]]; then
     printf '\nSERVICE_UID="%s"\nSERVICE_GID="%s"\n' "${INVOKING_UID}" "${INVOKING_GID}" \
       >> "${ENVIRONMENT_FILE}"
     detail "SERVICE_UID/SERVICE_GID manquaient : ajoutes (${INVOKING_UID}:${INVOKING_GID})."
+  fi
+
+  # Meme raison : un .env ecrit avant que le lien de demonstration existe ferait
+  # echouer le demarrage sur deux variables manquantes, et le message porterait
+  # sur la configuration plutot que sur la mise a jour.
+  if ! grep -q '^DEMO_ACCESS_LINK_TOKEN=' "${ENVIRONMENT_FILE}"; then
+    printf '\nDEMO_ACCESS_LINK_TOKEN="%s"\nDEMO_ACCESS_PIN="%s"\n' \
+      "${DEMO_ACCESS_LINK_TOKEN_DEFAULT}" "${DEMO_ACCESS_PIN_DEFAULT}" \
+      >> "${ENVIRONMENT_FILE}"
+    detail "Lien de demonstration absent du .env : ajoute."
   fi
 else
   announce "Generation de la configuration et des secrets"
@@ -236,6 +257,8 @@ else
 
   demo_lawyer_email="$(configured_or_default DEMO_LAWYER_EMAIL "${DEMO_LAWYER_EMAIL_DEFAULT}")"
   demo_lawyer_password="$(configured_or_default DEMO_LAWYER_PASSWORD "${DEMO_LAWYER_PASSWORD_DEFAULT}")"
+  demo_access_link_token="$(configured_or_default DEMO_ACCESS_LINK_TOKEN "${DEMO_ACCESS_LINK_TOKEN_DEFAULT}")"
+  demo_access_pin="$(configured_or_default DEMO_ACCESS_PIN "${DEMO_ACCESS_PIN_DEFAULT}")"
 
   # Toutes les valeurs sont entre guillemets, sans exception : la phrase de
   # passe contient des ESPACES, et une ligne `X=un deux trois` fait echouer le
@@ -286,6 +309,8 @@ GRAFANA_ADMIN_PASSWORD="$(configured_or_default GRAFANA_ADMIN_PASSWORD "${GRAFAN
 # DEMO_LAWYER_PASSWORD_DEFAULT dans install.sh.
 DEMO_LAWYER_EMAIL="${demo_lawyer_email}"
 DEMO_LAWYER_PASSWORD="${demo_lawyer_password}"
+DEMO_ACCESS_LINK_TOKEN="${demo_access_link_token}"
+DEMO_ACCESS_PIN="${demo_access_pin}"
 
 TRUSTED_PROXY_HOP_COUNT="1"
 WORKER_METRICS_PORT="9101"
@@ -433,8 +458,13 @@ printf '    Mot de passe   %s\n' "${DEMO_LAWYER_PASSWORD}"
 printf '\n  Grafana\n'
 printf '    Identifiant    admin\n'
 printf '    Mot de passe   %s\n' "${GRAFANA_ADMIN_PASSWORD}"
-printf '\n  Le compte avocat arrive avec une demande deja creee : connectez-vous,\n'
-printf '  ouvrez-la, et emettez son lien de depot depuis le tableau de bord.\n'
+printf '\n  Demande de demonstration, cote CLIENT (aucun compte necessaire)\n'
+printf '    Lien           %s/deposit/%s\n' "${PUBLIC_BASE_URL}" "${DEMO_ACCESS_LINK_TOKEN}"
+printf '    Code d acces   %s\n' "${DEMO_ACCESS_PIN}"
+printf '\n  Ce lien est celui de la demande deja creee pour le compte avocat\n'
+printf '  ci-dessus : ouvrez-le dans une fenetre privee pour voir les deux cotes.\n'
+printf '  Il est valable sept jours et « Regenerer le lien » le remplace par un\n'
+printf '  lien tire au sort, comme pour une vraie demande.\n'
 printf '\n  Ces identifiants sont ceux du README : ce sont les seules valeurs fixes\n'
 printf '  du projet. Tous les autres secrets sont tires au sort dans .env (0600).\n'
 printf '  Migrations, buckets, compte avocat et demande de demonstration se sont\n'

@@ -69,6 +69,23 @@ Aucune valeur n'est reprise de `.env.example`. Un secret d'exemple déployé tel
 quel serait le même chez tous ceux qui ont cloné le dépôt — ce n'est pas un
 secret, c'est une constante publique.
 
+### Repartir de zéro
+
+```bash
+docker compose -f infra/docker-compose.yml down --volumes
+rm -rf data .env && ./install.sh
+```
+
+Si `rm` répond `Permission denied`, c'est que des fichiers appartiennent à un
+autre utilisateur — un conteneur qui a écrit sous un uid différent du vôtre, ou
+un point de montage créé par le démon Docker. **Aucun `sudo` n'est nécessaire**,
+et c'est heureux : sur une machine partagée on ne l'a pas toujours. Docker, lui,
+tourne en root, et il suffit de le lui demander :
+
+```bash
+docker run --rm --volume "$PWD:/cible" alpine:3.20 chown -R "$(id -u):$(id -g)" /cible
+```
+
 ### Sur votre machine : `http://localhost:22300`
 
 C'est le défaut, et c'est délibéré. Le sous-domaine ci-dessus pointe vers **ma**

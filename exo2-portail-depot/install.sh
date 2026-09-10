@@ -256,14 +256,20 @@ set +a
 # non-root ne pourrait pas y ecrire. D'ou des bind mounts, crees ici avec le bon
 # proprietaire AVANT le premier `up`.
 announce "Preparation des repertoires de donnees"
+# `data/grafana/dashboards` est cree ICI alors que rien n'y ecrit : le compose
+# monte les tableaux de bord DEDANS, c'est-a-dire a l'interieur d'un autre
+# montage. Un point de montage imbrique qui n'existe pas encore est cree par le
+# demon Docker, donc en ROOT — et il reste ensuite sur la machine, impossible a
+# effacer pour qui n'a pas les privileges. Le creer d'avance le fait appartenir
+# a l'utilisateur.
 mkdir -p \
   data/postgres/pgdata \
   data/minio \
   data/prometheus \
-  data/grafana \
   data/observability/secrets \
   data/traefik/dynamic \
-  data/traefik/acme
+  data/traefik/acme \
+  data/grafana/dashboards
 detail "data/{postgres,minio,prometheus,grafana,traefik}"
 
 # Le secret de collecte est lu par Prometheus dans un fichier, jamais passe en

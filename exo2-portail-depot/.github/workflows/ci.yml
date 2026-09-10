@@ -1,0 +1,201 @@
+# Un job par nature de verification, et pas un seul job « tests » : les suites
+# unitaires rendent leur verdict en une minute, les suites qui demandent
+# Postgres, MinIO et clamav en demandent plusieurs. Les separer donne le retour
+# rapide tout de suite, au lieu de le faire attendre derriere le plus lent.
+name: Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Un push qui en remplace un autre annule la verification en cours : ce depot
+# n'a aucune raison de payer deux fois pour un commit deja depasse.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # La version EXACTE de l'image de production. Verifier sur une autre reviendrait
+  # a ne rien verifier du tout.
+  NODE_VERSION: "24.11.0"
+
+jobs:
+  backend:
+    name: Backend — analyse statique et tests unitaires
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+        working-directory: backend
+
+      - run: npm run lint
+        working-directory: backend
+
+      - name: Tests unitaires
+        working-directory: backend
+        # Le meme drapeau que dans package.json : Jest execute des modules ES,
+        # et sans lui les fichiers de test ne sont meme pas charges.
+        run: NODE_OPTIONS=--experimental-vm-modules npx jest --ci
+
+  frontend:
+    name: Front — types, derive des contrats et tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: frontend
+
+      # Le `typecheck` du front comprend le test de derive des contrats, qui
+      # compile les sources du BACKEND : sans ses dependances, le compilateur ne
+      # resout pas `drizzle-orm` et rend des centaines de fausses erreurs.
+      - name: Dependances du backend, pour la derive des contrats
+        run: npm ci --ignore-scripts
+        working-directory: backend
+
+      - run: npm run typecheck
+        working-directory: frontend
+
+      - run: npx vitest run
+        working-directory: frontend
+
+  integration:
+    name: Backend — tests d'integration
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+        working-directory: backend
+
+      - name: Postgres, MinIO et clamav
+        run: ./infra/ci/prepare_test_environment.sh
+
+      - name: Tests d'integration
+        working-directory: backend
+        run: |
+          set -a
+          . ../.env
+          set +a
+          NODE_OPTIONS=--experimental-vm-modules npx jest --ci --config ./test/jest-integration.json
+
+      - name: Journaux des services en cas d'echec
+        if: failure()
+        run: docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml logs --tail 200
+
+  bout_en_bout:
+    name: Parcours complets (Playwright)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          # Les DEUX verrous : ce travail installe les deux projets, et ne
+          # nommer que l'un ferait porter le cache sur une empreinte qui ne
+          # change pas quand l'autre bouge.
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: backend
+
+      - run: npm ci
+        working-directory: frontend
+
+      # Chromium seul : les trois scenarios de bureau et celui de mobile
+      # tournent tous dessus, et telecharger Firefox et WebKit pour rien
+      # ajouterait plusieurs minutes a chaque verification.
+      - name: Navigateur
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Postgres, MinIO et clamav
+        run: ./infra/ci/prepare_test_environment.sh
+
+      # L'API, le worker et le serveur Vite sont demarres par la configuration
+      # Playwright elle-meme : un scenario qui ne peut pas demarrer sa propre
+      # pile n'est pas rejouable sur un poste.
+      - name: Scenarios
+        run: npx playwright test
+        working-directory: frontend
+
+      - name: Rapport en cas d'echec
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-playwright
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          retention-days: 7
+
+  observabilite:
+    name: Observabilite — regles d'alerte
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # Une regle d'alerte est du code qui ne s'execute qu'au moment de la panne :
+      # personne ne remarque qu'elle est muette tant qu'il ne se passe rien. Ces
+      # cas la font parler sur des series synthetiques, et exigent son silence sur
+      # le fonctionnement normal. La version de promtool est celle de l'image
+      # deployee : verifier sur une autre reviendrait a ne rien verifier.
+      - name: Regles d'alerte
+        run: |
+          docker run --rm --volume "${{ github.workspace }}/observability/prometheus:/regles:ro" \
+            --entrypoint promtool prom/prometheus:v3.5.0 check rules /regles/alert_rules.yml
+          docker run --rm --volume "${{ github.workspace }}/observability/prometheus:/regles:ro" \
+            --entrypoint promtool prom/prometheus:v3.5.0 test rules /regles/alert_rules_test.yml
+
+  images:
+    name: Images de deploiement
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Construites, jamais publiees : ce depot n'a pas de registre, et la
+      # question a laquelle ce job repond est « le deploiement compile-t-il
+      # encore ». L'image du front echoue si les contrats ont derive.
+      - name: Image de l'application
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image du front
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

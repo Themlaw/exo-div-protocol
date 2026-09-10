@@ -55,6 +55,7 @@ export class ObjectStorageBucketBootstrapper implements OnApplicationBootstrap {
       useFactory: (environment: ApplicationEnvironment): ObjectStorage =>
         new MinioObjectStorage({
           endpoint_url: environment.minio_endpoint,
+          public_endpoint_url: environment.minio_public_endpoint,
           access_key: environment.minio_root_user,
           secret_key: environment.minio_root_password,
         }),

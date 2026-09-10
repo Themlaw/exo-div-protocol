@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD, DiscoveryModule } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, DiscoveryModule } from '@nestjs/core';
 import { ConfigurationModule } from './config/configuration.module';
 import { LoggingModule } from './shared/logging/logging.module';
 import { ClockModule } from './shared/clock.module';
@@ -21,6 +21,7 @@ import { InternalStorageModule } from './storage/internal_storage.module';
 import { RouteAccessStartupAudit } from './auth/route_access_startup_audit';
 import { RouteAccessGuard } from './auth/route_access.guard';
 import { UnroutedRequestFilter } from './auth/unrouted_request.filter';
+import { UnhandledFailureLoggingInterceptor } from './shared/log_unhandled_failure';
 
 @Module({
   // DiscoveryModule : c'est lui qui rend `DiscoveryService` injectable, et donc
@@ -56,6 +57,10 @@ import { UnroutedRequestFilter } from './auth/unrouted_request.filter';
     // qui n'est pas 'lawyer', celui-ci ne connait que la session de depot.
     { provide: APP_GUARD, useClass: ClientDepositSessionGuard },
     { provide: APP_FILTER, useClass: UnroutedRequestFilter },
+    // Le logger de Nest est tu au demarrage pour qu'aucune trace n'echappe au
+    // masquage des champs sensibles. Sans ce remplacant, une panne imprevue
+    // repondait 500 et ne laissait AUCUNE trace.
+    { provide: APP_INTERCEPTOR, useClass: UnhandledFailureLoggingInterceptor },
   ],
 })
 export class AppModule {}

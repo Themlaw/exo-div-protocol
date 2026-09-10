@@ -21,6 +21,14 @@ import {
 
 export interface MinioConnectionSettings {
   endpoint_url: string;
+  // L'adresse par laquelle un NAVIGATEUR joint le stockage, quand ce n'est pas
+  // celle par laquelle l'application le joint. En production l'application parle
+  // a MinIO par le reseau interne et le navigateur par le proxy : ce sont deux
+  // noms differents, et une URL pre-signee en GET signe l'HOTE — signee sur le
+  // nom interne, elle rendrait 403 des que le navigateur la presente.
+  //
+  // Absente en developpement, ou les deux se confondent.
+  public_endpoint_url?: string | undefined;
   access_key: string;
   secret_key: string;
 }
@@ -28,10 +36,20 @@ export interface MinioConnectionSettings {
 // La configuration arrive sous forme d'URL — une seule variable a renseigner,
 // et le schema y porte deja le TLS. La decouper en hote, port et booleen dans
 // l'environnement multiplierait les facons de se tromper.
+// Declaree, et jamais decouverte. Sans region dans ses options, le client MinIO
+// la DEMANDE au serveur avant de signer quoi que ce soit — or le client signeur
+// est configure sur l'adresse PUBLIQUE du stockage, celle du navigateur, que
+// l'application ne peut pas joindre depuis son reseau interne. La demande
+// d'autorisation d'envoi rendait alors 500 sur une pile parfaitement saine.
+// `us-east-1` est la region par defaut de MinIO en mode simple ; elle entre
+// dans la signature SigV4, elle doit donc etre la meme des deux cotes.
+export const STORAGE_REGION = 'us-east-1';
+
 export function parse_minio_connection_settings(settings: MinioConnectionSettings): {
   endPoint: string;
   port: number;
   useSSL: boolean;
+  region: string;
   accessKey: string;
   secretKey: string;
 } {
@@ -42,16 +60,57 @@ export function parse_minio_connection_settings(settings: MinioConnectionSetting
     endPoint: endpoint.hostname,
     port: endpoint.port === '' ? (uses_tls ? 443 : 80) : Number(endpoint.port),
     useSSL: uses_tls,
+    region: STORAGE_REGION,
     accessKey: settings.access_key,
     secretKey: settings.secret_key,
   };
 }
 
+// Ce qui signe, par opposition a ce qui administre. Les deux se confondent
+// partout sauf en production.
+export function resolve_minio_signing_settings(settings: MinioConnectionSettings): ReturnType<
+  typeof parse_minio_connection_settings
+> {
+  return parse_minio_connection_settings(
+    settings.public_endpoint_url === undefined
+      ? settings
+      : { ...settings, endpoint_url: settings.public_endpoint_url },
+  );
+}
+
+// Les deux codes que S3 rend quand le bucket vient d'etre cree : le premier par
+// nous, le second par quelqu'un d'autre — impossible sur un MinIO qui n'a qu'un
+// seul compte, mais c'est le code que la specification prevoit.
+const BUCKET_ALREADY_CREATED_ERROR_CODES: readonly string[] = [
+  'BucketAlreadyOwnedByYou',
+  'BucketAlreadyExists',
+];
+
+export function is_bucket_already_created_error(error: unknown): boolean {
+  // Le code, jamais le message : celui de MinIO est une phrase en anglais qu'une
+  // mise a jour peut reformuler sans prevenir.
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    BUCKET_ALREADY_CREATED_ERROR_CODES.includes(error.code)
+  );
+}
+
 export class MinioObjectStorage implements ObjectStorage {
+  // Deux clients, et non un : celui qui cree les buckets et pose les
+  // notifications doit joindre MinIO par le reseau interne — le nom public n'y
+  // est pas resolvable, et le proxy n'a pas a porter du trafic d'administration.
   readonly #client: MinioClient;
+  readonly #signing_client: MinioClient;
 
   constructor(settings: MinioConnectionSettings) {
     this.#client = new MinioClient(parse_minio_connection_settings(settings));
+    this.#signing_client =
+      settings.public_endpoint_url === undefined
+        ? this.#client
+        : new MinioClient(resolve_minio_signing_settings(settings));
   }
 
   // Au demarrage de l'application, pas dans install.sh : apres l'installation
@@ -64,8 +123,20 @@ export class MinioObjectStorage implements ObjectStorage {
   // nous.
   async ensure_buckets_exist(): Promise<void> {
     for (const bucket_name of [QUARANTINE_BUCKET_NAME, VERIFIED_BUCKET_NAME]) {
-      if (!(await this.#client.bucketExists(bucket_name))) {
+      if (await this.#client.bucketExists(bucket_name)) {
+        continue;
+      }
+
+      try {
         await this.#client.makeBucket(bucket_name);
+      } catch (error: unknown) {
+        // Le raccourci ci-dessus vaut pour le cas courant — une pile deja
+        // installee — et rien de plus : `app` et `worker` partagent cet
+        // amorcage et demarrent ENSEMBLE, donc entre le constat et la creation,
+        // l'autre a pu creer le bucket. La garantie vient d'ici, pas du test.
+        if (!is_bucket_already_created_error(error)) {
+          throw error;
+        }
       }
     }
   }
@@ -91,7 +162,7 @@ export class MinioObjectStorage implements ObjectStorage {
     policy: PresignedUploadPolicy,
     declared_mime_type: string,
   ): Promise<PresignedUploadTicket> {
-    const post_policy = this.#client.newPostPolicy();
+    const post_policy = this.#signing_client.newPostPolicy();
     post_policy.setBucket(policy.bucket);
     // La cle EXACTE, et non le prefixe : c'est la contrainte la plus forte que
     // la policy sache poser. Le prefixe que porte le domaine reste la borne
@@ -112,7 +183,7 @@ export class MinioObjectStorage implements ObjectStorage {
     post_policy.setContentType(declared_mime_type);
     post_policy.setExpires(policy.expires_at);
 
-    const signed: PostPolicyResult = await this.#client.presignedPostPolicy(post_policy);
+    const signed: PostPolicyResult = await this.#signing_client.presignedPostPolicy(post_policy);
 
     return {
       upload_url: signed.postURL,
@@ -128,7 +199,7 @@ export class MinioObjectStorage implements ObjectStorage {
     // les modifier apres coup rend 403. C'est ce qui empeche le porteur de
     // l'URL de retourner `attachment` en `inline`, donc de faire ouvrir une
     // piece deposee DANS une origine de navigateur.
-    const download_url: string = await this.#client.presignedGetObject(
+    const download_url: string = await this.#signing_client.presignedGetObject(
       request.bucket,
       request.object_key,
       request.lifetime_seconds,

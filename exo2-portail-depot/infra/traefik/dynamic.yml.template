@@ -1,0 +1,112 @@
+# MODELE. `install.sh` y substitue les marqueurs __...__ et ecrit le resultat
+# dans `data/traefik/dynamic/portail.yml` : ni la configuration statique ni le
+# fournisseur `file` de Traefik ne savent lire une variable d'environnement, et
+# ecrire le nom d'hote en dur dans un fichier versionne obligerait chaque
+# candidat a le modifier avant de deployer.
+#
+# Les marqueurs autres que le nom d'hote portent la SEULE difference entre une
+# installation publique et une installation locale : la premiere ecoute en TLS
+# sur `websecure` et redirige le clair, la seconde ecoute en clair sur `web`
+# parce qu'aucune autorite ne certifiera `localhost`. Rendre cette difference
+# ici plutot que dans la configuration statique evite un second fichier compose.
+http:
+  routers:
+    # L'API. Declaree AVANT le front dans l'ordre de priorite, parce que la
+    # regle du front attrape tout ce qui reste.
+    api:
+      rule: "Host(`__PUBLIC_HOSTNAME__`) && (PathPrefix(`/api`) || PathPrefix(`/health`))"
+      service: app
+      priority: 100
+      entryPoints: [__ENTRYPOINT__]
+      middlewares: [securite]
+      __TLS__
+
+    # Le stockage objet, joint DIRECTEMENT par le navigateur : les octets d'un
+    # depot ne passent jamais par l'API. Les deux prefixes sont les noms des
+    # buckets, et le chemin n'est pas reecrit — une URL pre-signee en GET signe
+    # le CHEMIN autant que l'hote, et le moindre `stripPrefix` la rendrait 403.
+    stockage:
+      rule: "Host(`__PUBLIC_HOSTNAME__`) && (PathPrefix(`/depot-quarantine`) || PathPrefix(`/depot-verified`))"
+      service: minio
+      priority: 100
+      entryPoints: [__ENTRYPOINT__]
+      middlewares: [securite]
+      __TLS__
+
+    # Grafana, derriere sa propre authentification. Jamais anonyme.
+    grafana:
+      rule: "Host(`__PUBLIC_HOSTNAME__`) && PathPrefix(`/grafana`)"
+      service: grafana
+      priority: 100
+      entryPoints: [__ENTRYPOINT__]
+      middlewares: [securite]
+      __TLS__
+
+    # Le front, en dernier : il sert la page pour tout le reste, y compris les
+    # chemins que seul le routeur du navigateur connait — `/deposit/<jeton>`.
+    front:
+      rule: "Host(`__PUBLIC_HOSTNAME__`)"
+      service: web
+      priority: 1
+      entryPoints: [__ENTRYPOINT__]
+      middlewares: [securite]
+      __TLS__
+
+    __REDIRECTION_ROUTER__
+  services:
+    app:
+      loadBalancer:
+        servers:
+          - url: "http://app:3000"
+    web:
+      loadBalancer:
+        servers:
+          - url: "http://web:8080"
+    minio:
+      loadBalancer:
+        servers:
+          - url: "http://minio:9000"
+    grafana:
+      loadBalancer:
+        servers:
+          - url: "http://grafana:3000"
+
+  middlewares:
+    securite:
+      headers:
+        # HSTS. Deux ans, sous-domaines compris : le portail n'est joignable
+        # qu'en HTTPS, et le declarer empeche la toute premiere requete en clair
+        # d'un visiteur deja venu.
+        #
+        # Rendu a 0 tant qu'on emet des certificats de STAGING, et sur une
+        # installation locale : un navigateur qui a retenu la directive refuse
+        # ensuite la moindre connexion en clair vers ce nom, y compris pour
+        # depanner, et la duree est celle qu'il a memorisee — on ne peut pas la
+        # lui reprendre.
+        stsSeconds: __HSTS_SECONDS__
+        stsIncludeSubdomains: true
+        stsPreload: false
+        # Le navigateur ne doit jamais deviner le type d'une piece deposee : la
+        # detection par contenu ferait executer en HTML ce qui a ete annonce en
+        # PDF.
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: same-origin
+        browserXssFilter: false
+        customResponseHeaders:
+          # Traefik annonce sa version dans `Server` par defaut. Elle n'apprend
+          # rien d'utile a un visiteur et donne a un attaquant la liste des
+          # failles a essayer.
+          Server: ""
+          X-Powered-By: ""
+
+    vers_https:
+      # La redirection vit ici et non dans un `entryPoints.web.http.redirections`
+      # de la configuration statique : celle-ci est la meme pour toutes les
+      # installations, et une installation locale n'a pas de HTTPS vers lequel
+      # rediriger. Le challenge ACME n'est pas mange par cette middleware — le
+      # routeur interne qui le sert a une priorite superieure a tout routeur
+      # declare ici.
+      redirectScheme:
+        scheme: https
+        permanent: true

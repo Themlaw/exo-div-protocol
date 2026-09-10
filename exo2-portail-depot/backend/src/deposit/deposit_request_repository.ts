@@ -89,6 +89,12 @@ export interface DepositRequestRepository {
   // futur appelant distrait pour qu'elle sorte.
   list_overviews_for_owner(owner_user_id: string): Promise<DepositRequestOverview[]>;
 
+  // Un COMPTE et non la liste : l'amorcage de la demande de demonstration n'a
+  // besoin que de savoir si la base est vierge, et charger les apercus — donc
+  // les pieces et le journal de chaque demande — pour n'en lire que la longueur
+  // ferait payer un demarrage entier a une question binaire.
+  count_for_owner(owner_user_id: string): Promise<number>;
+
   // Le predicat seul, sans rapporter la demande : une route qui n'a besoin que
   // de savoir « est-ce son dossier ? » ne doit pas charger les emplacements et
   // les pieces pour en jeter le resultat.
@@ -169,6 +175,15 @@ export class DrizzleDepositRequestRepository implements DepositRequestRepository
 
       return created_id;
     });
+  }
+
+  async count_for_owner(owner_user_id: string): Promise<number> {
+    const [row] = await this.database
+      .select({ total: sql<number>`count(*)::int` })
+      .from(deposit_request)
+      .where(eq(deposit_request.owner_user_id, owner_user_id));
+
+    return row?.total ?? 0;
   }
 
   async list_overviews_for_owner(owner_user_id: string): Promise<DepositRequestOverview[]> {

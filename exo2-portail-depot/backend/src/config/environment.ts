@@ -18,6 +18,7 @@ export const ENVIRONMENT_VARIABLE_NAMES = {
   access_link_token_pepper: 'ACCESS_LINK_TOKEN_PEPPER',
   internal_storage_webhook_secret: 'INTERNAL_STORAGE_WEBHOOK_SECRET',
   minio_endpoint: 'MINIO_ENDPOINT',
+  minio_public_endpoint: 'MINIO_PUBLIC_ENDPOINT',
   clamav_endpoint: 'CLAMAV_ENDPOINT',
   minio_root_user: 'MINIO_ROOT_USER',
   minio_root_password: 'MINIO_ROOT_PASSWORD',
@@ -30,12 +31,15 @@ export const ENVIRONMENT_VARIABLE_NAMES = {
   lawyer_auth_secret: 'BETTER_AUTH_SECRET',
 } as const satisfies Record<keyof ApplicationEnvironment, string>;
 
-// Les seules variables a porter une valeur par defaut, donc les seules a ne pas
-// etre requises : un port d'ecoute est un detail de deploiement, pas un secret
-// ni une decision de securite. Tout le reste doit etre fourni explicitement.
+// Les variables qui ne sont pas requises, et les seules : un port d'ecoute est
+// un detail de deploiement, pas un secret ni une decision de securite, et
+// l'endpoint public du stockage n'existe que la ou l'application et le
+// navigateur joignent MinIO par deux noms differents. Tout le reste doit etre
+// fourni explicitement.
 export const OPTIONAL_ENVIRONMENT_VARIABLES: readonly string[] = [
   ENVIRONMENT_VARIABLE_NAMES.http_port,
   ENVIRONMENT_VARIABLE_NAMES.worker_metrics_port,
+  ENVIRONMENT_VARIABLE_NAMES.minio_public_endpoint,
 ];
 
 export const REQUIRED_ENVIRONMENT_VARIABLES: readonly string[] = Object.values(
@@ -55,6 +59,12 @@ export interface ApplicationEnvironment {
   // faire a temps constant, ce qu'une vraie signature n'aurait pas exige.
   internal_storage_webhook_secret: string;
   minio_endpoint: string;
+  // L'adresse par laquelle un NAVIGATEUR joint le stockage. FACULTATIVE : en
+  // developpement l'application et le navigateur passent par la meme, et exiger
+  // une seconde variable pour rien serait une facon de plus de se tromper. En
+  // production ce sont deux noms distincts, et c'est celui-ci qui doit entrer
+  // dans la signature des URL pre-signees.
+  minio_public_endpoint: string | undefined;
   // Ou joindre clamd, sous la forme `tcp://hote:port`. Une variable et non une
   // constante : le scanner est un service voisin, et son adresse est une
   // decision de deploiement au meme titre que celle de MinIO.
@@ -469,6 +479,24 @@ export function parse_application_environment(
 
   // Une chaine vide compte comme manquante : une variable presente mais vide
   // n'est configuree qu'en apparence.
+  // Une URL facultative, mais jamais une URL absurde : laisser passer une valeur
+  // illisible reporterait l'echec au premier depot d'un client, plusieurs heures
+  // apres l'installation.
+  function read_optional_url(variable_name: string): string | undefined {
+    const raw_value = raw_environment[variable_name];
+
+    if (raw_value === undefined || raw_value === '') {
+      return undefined;
+    }
+
+    if (parse_public_base_url(raw_value) === null) {
+      violations.push({ variable: variable_name, reason: 'malformed' });
+      return undefined;
+    }
+
+    return raw_value;
+  }
+
   function required_value(variable_name: string): string | undefined {
     const raw_value = raw_environment[variable_name];
     if (raw_value === undefined || raw_value === '') {
@@ -489,6 +517,9 @@ export function parse_application_environment(
     ENVIRONMENT_VARIABLE_NAMES.internal_storage_webhook_secret,
   );
   const minio_endpoint = required_value(ENVIRONMENT_VARIABLE_NAMES.minio_endpoint);
+  const minio_public_endpoint = read_optional_url(
+    ENVIRONMENT_VARIABLE_NAMES.minio_public_endpoint,
+  );
   const clamav_endpoint = required_value(ENVIRONMENT_VARIABLE_NAMES.clamav_endpoint);
   const minio_root_user = required_value(ENVIRONMENT_VARIABLE_NAMES.minio_root_user);
   const minio_root_password = required_value(
@@ -762,6 +793,7 @@ export function parse_application_environment(
       internal_storage_webhook_secret,
     ),
     minio_endpoint: resolved(ENVIRONMENT_VARIABLE_NAMES.minio_endpoint, minio_endpoint),
+    minio_public_endpoint,
     clamav_endpoint: resolved(ENVIRONMENT_VARIABLE_NAMES.clamav_endpoint, clamav_endpoint),
     minio_root_user: resolved(ENVIRONMENT_VARIABLE_NAMES.minio_root_user, minio_root_user),
     minio_root_password: resolved(

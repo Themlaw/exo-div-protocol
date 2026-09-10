@@ -1,0 +1,15 @@
+# Le contexte de construction est la RACINE pour les deux images : le front a
+# besoin de `infra/nginx`, et un contexte par service obligerait a le recopier.
+# Tout ce qui suit ne doit jamais entrer dans une image.
+.git
+memories
+ai-logs
+data
+observability/grafana/dashboards
+**/node_modules
+**/dist
+**/coverage
+**/test-results
+**/playwright-report
+**/*.tsbuildinfo
+.env

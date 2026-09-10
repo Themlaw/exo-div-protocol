@@ -1,0 +1,120 @@
+# Tests des regles d'alerte, joues par `promtool test rules`.
+#
+# Une regle d'alerte est du CODE : elle a une condition, un seuil et une duree,
+# et une condition fausse ne se voit pas — la regle reste simplement muette, ce
+# qui ressemble a s'y meprendre a « tout va bien ». Chaque cas ci-dessous fait
+# donc les deux moities du travail : il montre que l'alerte se declenche sur la
+# panne, ET qu'elle ne se declenche pas sur le fonctionnement normal.
+
+rule_files:
+  - alert_rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: le proxy rend des erreurs serveur
+    input_series:
+      # Une erreur toutes les deux secondes sur l'API, soit 0,5/s : bien au-dessus
+      # du seuil. Le compteur est cumulatif, d'ou la progression.
+      - series: 'traefik_router_requests_total{router="api@file", code="502"}'
+        values: '0+30x20'
+      # Le front, lui, ne rend que des 200 : il ne doit PAS declencher.
+      - series: 'traefik_router_requests_total{router="front@file", code="200"}'
+        values: '0+600x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ProxyRendDesErreurs
+        exp_alerts:
+          - exp_labels:
+              severity: critique
+              router: api@file
+            exp_annotations:
+              summary: "Le routeur api@file rend des erreurs serveur"
+              description: >-
+                Traefik rend 0.50 erreur(s) 5xx par seconde sur api@file depuis
+                cinq minutes. C'est ce que le visiteur voit, que l'application le
+                sache ou non.
+
+  - interval: 1m
+    name: un 5xx isole ne reveille personne
+    input_series:
+      # Trois erreurs en tout, puis plus rien : le redemarrage ordinaire d'un
+      # service. Une alerte qui se declenche la-dessus finit par etre ignoree, et
+      # c'est ainsi qu'on rate la vraie panne.
+      - series: 'traefik_router_requests_total{router="api@file", code="502"}'
+        values: '0 1 2 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ProxyRendDesErreurs
+        exp_alerts: []
+
+  - interval: 1m
+    name: le certificat approche de son echeance
+    input_series:
+      # `time()` vaut 0 au debut d'un test promtool : une echeance a dix jours
+      # s'ecrit donc directement en secondes.
+      - series: 'traefik_tls_certs_not_after{cn="portail.exemple.fr"}'
+        values: '864000x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: CertificatBientotExpire
+        exp_alerts:
+          - exp_labels:
+              severity: critique
+              cn: portail.exemple.fr
+            exp_annotations:
+              summary: "Le certificat TLS expire dans moins de quatorze jours"
+              description: >-
+                Traefik aurait du le renouveler a trente jours. Verifier le
+                journal du challenge ACME et le quota de l'autorite — le staging
+                et la production ont des quotas distincts.
+
+  - interval: 1m
+    name: un certificat frais ne declenche rien
+    input_series:
+      # Quatre-vingt-dix jours, soit un certificat qui vient d'etre emis.
+      - series: 'traefik_tls_certs_not_after{cn="portail.exemple.fr"}'
+        values: '7776000x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: CertificatBientotExpire
+        exp_alerts: []
+
+  - interval: 1m
+    name: le routage recharge echoue
+    input_series:
+      # Un rechargement a lieu a la vingtieme minute, mais le dernier SUCCES
+      # reste fige a l'instant zero : c'est exactement ce que produit un fichier
+      # de routage invalide — Traefik relit, refuse, et continue de servir
+      # l'ancienne configuration sans que rien ne change en surface.
+      - series: 'traefik_config_reloads_total'
+        values: '0x20 1 2x8'
+      - series: 'traefik_config_last_reload_success'
+        values: '0x29'
+    alert_rule_test:
+      - eval_time: 26m
+        alertname: RoutageDuProxyRefuse
+        exp_alerts:
+          - exp_labels:
+              severity: avertissement
+            exp_annotations:
+              summary: "Traefik a recharge sa configuration sans succes"
+              description: >-
+                Un rechargement a eu lieu dans le dernier quart d'heure mais le
+                dernier SUCCES est plus ancien : le routage servi n'est pas celui
+                du fichier.
+
+  - interval: 1m
+    name: un rechargement REUSSI ne declenche rien
+    input_series:
+      - series: 'traefik_config_reloads_total'
+        values: '0x20 1 2x8'
+      # L'horodatage du dernier succes suit le rechargement : le fichier a ete
+      # accepte, et c'est le cas nominal a chaque `install.sh`.
+      - series: 'traefik_config_last_reload_success'
+        values: '0x20 1200x8'
+    alert_rule_test:
+      - eval_time: 26m
+        alertname: RoutageDuProxyRefuse
+        exp_alerts: []

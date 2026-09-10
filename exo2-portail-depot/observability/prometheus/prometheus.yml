@@ -57,6 +57,20 @@ scrape_configs:
     static_configs:
       - targets: ['worker:9101']
 
+  # Le proxy. Il est le SEUL a mesurer ce que l'exterieur recoit reellement :
+  # l'application compte ses propres reponses, mais elle ne sait rien d'une
+  # requete que Traefik a refusee avant elle, ni d'un certificat sur le point
+  # d'expirer. Ses series portent le routeur et le code de reponse, donc la
+  # difference entre « le portail est lent » et « le stockage est lent ».
+  #
+  # Sans secret partage, et c'est assume : l'entrypoint `metrics` de Traefik
+  # n'ecoute que sur le reseau `observability`, qui est `internal`, et aucun
+  # routeur ne le publie. Y ajouter une authentification demanderait un
+  # middleware sur une surface qui n'est joignable que par le collecteur.
+  - job_name: traefik
+    static_configs:
+      - targets: ['traefik:8082']
+
   # Prometheus se collecte lui-meme : sans cela, `up == 0` ne dirait rien du
   # collecteur, et une chaine d'alerte aveugle sur elle-meme n'alerte de rien.
   - job_name: prometheus

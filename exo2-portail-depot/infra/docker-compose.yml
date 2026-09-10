@@ -1,6 +1,11 @@
 # Durcissement applique a tous les services : on part du principe qu'un attaquant
 # finira dans un conteneur, et on cherche a ce qu'il n'y trouve rien a faire.
 #
+# Ce fichier vit dans `infra/`, avec le reste de ce qui deploie. Consequence a
+# connaitre : Docker Compose resout les chemins relatifs depuis le repertoire du
+# FICHIER, d'ou les `../` — le contexte de construction et les montages designent
+# tous la racine du depot. Ne pas les reecrire en `./` en croyant les simplifier.
+#
 # Chaque service tourne en 1000:1000 (jamais root), avec un systeme de fichiers
 # racine en lecture seule, toutes les capabilities Linux retirees, et l'interdiction
 # d'acquerir de nouveaux privileges — ce qui neutralise l'escalade par binaire suid.
@@ -30,7 +35,7 @@ services:
       # contenant deja quoi que ce soit, y compris un point de montage.
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - ../data/postgres:/var/lib/postgresql/data
     tmpfs:
       # Les seuls chemins que Postgres doit ecrire hors de PGDATA. `noexec` et
       # `nosuid` empechent d'y deposer puis d'y executer un binaire.
@@ -89,7 +94,7 @@ services:
       MINIO_NOTIFY_WEBHOOK_QUEUE_DIR_portail: /data/.notifications
       MINIO_NOTIFY_WEBHOOK_QUEUE_LIMIT_portail: "10000"
     volumes:
-      - ./data/minio:/data
+      - ../data/minio:/data
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     healthcheck:
@@ -182,12 +187,12 @@ services:
       # port. Rien ici n'a besoin de recharger a chaud.
       - --web.listen-address=:9090
     volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./observability/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../observability/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
       # Le secret de collecte n'est jamais dans un fichier versionne : install.sh
       # l'ecrit a partir de l'environnement, avec les droits 0400.
-      - ./data/observability/secrets:/etc/prometheus/secrets:ro
-      - ./data/prometheus:/prometheus
+      - ../data/observability/secrets:/etc/prometheus/secrets:ro
+      - ../data/prometheus:/prometheus
     networks:
       # UNIQUEMENT le reseau d'observabilite. Le collecteur n'a aucune raison
       # d'atteindre Postgres ni clamav, et le lui interdire supprime la question.
@@ -225,9 +230,9 @@ services:
       # lire ses journaux.
       GF_PLUGINS_PREINSTALL_DISABLED: "true"
     volumes:
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - ./data/grafana:/var/lib/grafana
+      - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../data/grafana:/var/lib/grafana
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
     networks:
@@ -236,6 +241,213 @@ services:
       # d'alerting qu'on ne peut pas montrer ne prouve rien — mais elle reste
       # derriere l'authentification de Grafana, jamais anonyme.
       - proxied
+
+  app:
+    # Construite depuis la RACINE : le front a besoin de `infra/nginx`, et un
+    # contexte par service obligerait a le recopier.
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    image: ${IMAGE_REPOSITORY:-portail-depot}/app:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      # Pas fige a `production` : sur une machine locale il n'y a ni nom
+      # d'hote public ni TLS, et l'application REFUSE de demarrer en
+      # production sur une URL en clair — a raison, le cookie de session ne
+      # pourrait pas y etre pose en Secure. install.sh tranche selon le nom
+      # d'hote saisi.
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      ACCESS_LINK_TOKEN_PEPPER: ${ACCESS_LINK_TOKEN_PEPPER}
+      INTERNAL_STORAGE_WEBHOOK_SECRET: ${INTERNAL_STORAGE_WEBHOOK_SECRET}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      # L'adresse par laquelle le NAVIGATEUR joint le stockage. Une URL
+      # pre-signee en GET signe l'hote : signee sur `minio:9000`, elle rendrait
+      # 403 des que le navigateur la presente au proxy.
+      MINIO_PUBLIC_ENDPOINT: ${PUBLIC_BASE_URL}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      CLAMAV_ENDPOINT: ${CLAMAV_ENDPOINT}
+      DEMO_LAWYER_EMAIL: ${DEMO_LAWYER_EMAIL}
+      DEMO_LAWYER_PASSWORD: ${DEMO_LAWYER_PASSWORD}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      # Un seul relais de confiance : Traefik. Le proxy frontal de la machine
+      # passe le 443 en TLS, il ne reecrit pas l'en-tete.
+      TRUSTED_PROXY_HOP_COUNT: ${TRUSTED_PROXY_HOP_COUNT:-1}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      # `node` plutot que `curl` : l'image d'execution ne porte aucun client
+      # HTTP, et en installer un pour la seule sonde ajouterait une surface a
+      # ce qui doit en avoir le moins possible.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health/ready').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - proxied
+      - datastore
+      # Prometheus collecte /metrics : sans ce reseau, la cible reste `down` et
+      # les alertes se declenchent sur une application parfaitement saine.
+      - observability
+
+  worker:
+    # LA MEME image que l'application, un point d'entree different : le worker
+    # partage tout le domaine — statuts, journal, stockage — et deux images
+    # divergeraient au premier correctif applique d'un seul cote.
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    image: ${IMAGE_REPOSITORY:-portail-depot}/app:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command: ["node", "dist/worker_main"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      ACCESS_LINK_TOKEN_PEPPER: ${ACCESS_LINK_TOKEN_PEPPER}
+      INTERNAL_STORAGE_WEBHOOK_SECRET: ${INTERNAL_STORAGE_WEBHOOK_SECRET}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_PUBLIC_ENDPOINT: ${PUBLIC_BASE_URL}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      CLAMAV_ENDPOINT: ${CLAMAV_ENDPOINT}
+      DEMO_LAWYER_EMAIL: ${DEMO_LAWYER_EMAIL}
+      DEMO_LAWYER_PASSWORD: ${DEMO_LAWYER_PASSWORD}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      TRUSTED_PROXY_HOP_COUNT: ${TRUSTED_PROXY_HOP_COUNT:-1}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      # JAMAIS `proxied` : le worker n'expose aucune route publique, et Traefik
+      # n'a rien a lui demander. Son port de metriques ne vit que sur le reseau
+      # d'observabilite.
+      - datastore
+      - observability
+
+  web:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    image: ${IMAGE_REPOSITORY:-portail-depot}/web:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      # nginx ecrit son pid et ses corps de requete temporaires : sans ces deux
+      # chemins il refuse de demarrer en lecture seule.
+      - /tmp:rw,noexec,nosuid,size=32m
+      - /var/cache/nginx:rw,noexec,nosuid,size=32m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - proxied
+
+  traefik:
+    image: traefik:v3.5.3
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    command:
+      # TOUTE la configuration statique en arguments, et le routage dynamique
+      # dans un fichier monte : c'est ce qui permet de NE PAS monter le socket
+      # Docker. Donner le socket a un service expose sur Internet est exactement
+      # ce qu'un relecteur releve dans un exercice de securite.
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      # 8000/8443 et non 80/443 : un port sous 1024 exigerait
+      # CAP_NET_BIND_SERVICE, que cette pile abandonne partout.
+      - --entryPoints.web.address=:8000
+      - --entryPoints.websecure.address=:8443
+      # Aucune redirection http -> https declaree ICI : elle vaudrait pour
+      # toutes les installations, or une installation locale n'a pas de HTTPS
+      # vers lequel rediriger — aucune autorite ne certifie `localhost`. Elle
+      # est rendue par install.sh dans le routage dynamique, ou elle peut
+      # dependre du nom d'hote.
+      - --entryPoints.metrics.address=:8082
+      - --metrics.prometheus.entryPoint=metrics
+      # Sans ce drapeau, Traefik n'expose que l'entrypoint et le service : on
+      # verrait « 12 reponses 502 sur websecure » sans savoir si c'est l'API, le
+      # stockage ou Grafana. Le routeur est justement la dimension qui distingue
+      # les quatre. Le cout en cardinalite est de quatre routeurs par code de
+      # reponse, ce qui ne se compare pas a une etiquette portant un chemin.
+      - --metrics.prometheus.addRoutersLabels=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/acme/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      # Staging par defaut : le quota de certificats est par domaine et par
+      # semaine, et ce domaine est PARTAGE entre les candidats. Basculer en
+      # production se fait en vidant ACME_CA_SERVER, une fois que tout marche.
+      - --certificatesresolvers.letsencrypt.acme.caserver=${ACME_CA_SERVER:-https://acme-staging-v02.api.letsencrypt.org/directory}
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+      - --accesslog=true
+    volumes:
+      - ../data/traefik/dynamic:/etc/traefik/dynamic:ro
+      # acme.json doit etre en 0600 et PERSISTANT : sans persistance, Traefik
+      # redemande un certificat a chaque redeploiement et brule le quota.
+      - ../data/traefik/acme:/acme
+    ports:
+      # Le proxy frontal de la machine relaie le sous-domaine vers ces deux
+      # ports. Sur 127.0.0.1 uniquement : rien ne doit etre joignable depuis
+      # l'exterieur autrement que par lui.
+      - "127.0.0.1:${TRAEFIK_HTTP_PORT}:8000"
+      - "127.0.0.1:${TRAEFIK_HTTPS_PORT}:8443"
+    depends_on:
+      app:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    networks:
+      # SEUL service attache a un reseau non interne : c'est ce qui fait de lui
+      # le pont unique vers l'exterieur.
+      - edge
+      - proxied
+      # Traefik est le seul a voir ce que l'exterieur envoie VRAIMENT : codes de
+      # reponse par routeur, latence, connexions ouvertes, certificats. Sans ce
+      # reseau, son entrypoint `metrics` existerait sans que personne ne le lise,
+      # et une panne visible du dehors ne le serait d'aucune de nos series.
+      - observability
 
 volumes:
   clamav_signatures:
@@ -272,7 +484,7 @@ networks:
     # conteneur attache au seul reseau interne — il n'y a ni passerelle ni NAT —
     # et il ignore la directive `ports` en silence. Aucun port n'est donc publie
     # ici. Pour un acces depuis l'hote en developpement, utiliser
-    # `docker-compose.dev.yml`.
+    # `infra/docker-compose.dev.yml`.
     internal: true
 
 # Topologie a l'arrivee des services restants :

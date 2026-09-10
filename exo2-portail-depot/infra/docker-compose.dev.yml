@@ -1,6 +1,6 @@
 # Surcouche de DEVELOPPEMENT uniquement.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up -d
 #
 # Elle n'est jamais deployee : `install.sh` n'utilise que le fichier de base.
 # Le nom n'est volontairement pas `docker-compose.override.yml`, qui serait

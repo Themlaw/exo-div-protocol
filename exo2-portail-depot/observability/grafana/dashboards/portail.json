@@ -1,62 +1,123 @@
 {
   "title": "Portail de depot",
   "uid": "portail-depot",
-  "tags": ["portail"],
+  "tags": [
+    "portail"
+  ],
   "timezone": "browser",
   "editable": false,
   "schemaVersion": 39,
   "refresh": "30s",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "panels": [
     {
       "type": "stat",
       "title": "Chaine de scan",
-      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
       "fieldConfig": {
         "defaults": {
           "mappings": [
-            { "type": "value", "options": { "0": { "text": "injoignable", "color": "red" } } },
-            { "type": "value", "options": { "1": { "text": "clamd repond", "color": "green" } } }
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "injoignable",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "clamd repond",
+                  "color": "green"
+                }
+              }
+            }
           ]
         }
       },
-      "targets": [{ "expr": "portail_clamav_up", "legendFormat": "clamd" }]
+      "targets": [
+        {
+          "expr": "portail_clamav_up",
+          "legendFormat": "clamd"
+        }
+      ]
     },
     {
       "type": "stat",
       "title": "Plus vieux depot en attente de scan",
       "description": "La seule panne ou toutes les sondes d'infra sont vertes et ou le produit ne marche plus.",
-      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 300 },
-              { "color": "red", "value": 900 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 900
+              }
             ]
           }
         }
       },
       "targets": [
-        { "expr": "portail_scan_queue_oldest_pending_job_age_seconds", "legendFormat": "attente" }
+        {
+          "expr": "portail_scan_queue_oldest_pending_job_age_seconds",
+          "legendFormat": "attente"
+        }
       ]
     },
     {
       "type": "timeseries",
       "title": "Profondeur de la file de scan",
-      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 0 },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
       "targets": [
-        { "expr": "portail_scan_queue_depth", "legendFormat": "{{state}}" }
+        {
+          "expr": "portail_scan_queue_depth",
+          "legendFormat": "{{state}}"
+        }
       ]
     },
     {
       "type": "timeseries",
       "title": "Cycle de vie des demandes",
       "description": "Compteurs bruts sommes sur les deux processus : l'API et le travailleur ecrivent chacun au journal.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
       "targets": [
         {
           "expr": "sum by (type) (increase(portail_activity_events_total{type=~\"deposit_request_.*\"}[1h]))",
@@ -68,7 +129,12 @@
       "type": "timeseries",
       "title": "Acces au lien public",
       "description": "Echecs de PIN, liens bloques et tentatives sur lien inutilisable. Le ratio se calcule ici, jamais a l'exposition.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
       "targets": [
         {
           "expr": "sum by (type) (rate(portail_activity_events_total{type=~\"client_pin_rejected|access_link_blocked|unusable_access_link_attempted|deposit_session_opened\"}[5m]))",
@@ -80,7 +146,12 @@
       "type": "timeseries",
       "title": "Refus de cadence",
       "description": "Une defense qui tient sans se voir ne permet a personne de constater qu'on est attaque.",
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 13 },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
       "targets": [
         {
           "expr": "sum by (surface) (rate(portail_rate_limited_requests_total[5m]))",
@@ -92,7 +163,12 @@
       "type": "timeseries",
       "title": "Jetons de lien inconnus",
       "description": "Un balayage se lit dans une pente, pas dans une ligne de journal.",
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 13 },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
       "targets": [
         {
           "expr": "sum(rate(portail_unknown_access_link_attempts_total[5m]))",
@@ -103,11 +179,76 @@
     {
       "type": "timeseries",
       "title": "Pieces deposees, par verdict",
-      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 20 },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
       "targets": [
         {
           "expr": "sum by (type) (increase(portail_activity_events_total{type=~\"deposited_file_.*\"}[1h]))",
           "legendFormat": "{{type}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Reponses du proxy, par routeur",
+      "description": "Ce que l'EXTERIEUR recoit vraiment. L'application compte ses propres reponses, mais elle ne sait rien d'une requete que Traefik a refusee avant elle : un 502 parce qu'elle redemarre, un 404 sur un chemin qu'aucun routeur ne sert. Le routeur distingue le portail, l'API, le stockage et Grafana — sans lui, on verrait le nombre d'erreurs sans savoir laquelle des quatre surfaces est tombee.",
+      "datasource": null,
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": null,
+          "expr": "sum by (router, code) (rate(traefik_router_requests_total[5m]))",
+          "legendFormat": "{{router}} — {{code}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Latence vue du proxy (p95)",
+      "description": "Mesuree AVANT l'application, donc file d'attente comprise : c'est le temps que le client subit, pas celui que le serveur croit avoir mis. Le stockage y apparait a part — les octets d'un depot passent par le proxy sans jamais toucher l'API.",
+      "datasource": null,
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": null,
+          "expr": "histogram_quantile(0.95, sum by (le, service) (rate(traefik_service_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
         }
       ]
     }

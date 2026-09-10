@@ -76,6 +76,10 @@ export class FakeDepositRequestRepository implements DepositRequestRepository {
     throw new Error('non double : ce test ne lit pas la liste');
   }
 
+  async count_for_owner(): Promise<number> {
+    throw new Error('non double : ce test ne compte pas les demandes');
+  }
+
   async belongs_to_owner(): Promise<boolean> {
     throw new Error('non double : ce test ne verifie pas l appartenance');
   }

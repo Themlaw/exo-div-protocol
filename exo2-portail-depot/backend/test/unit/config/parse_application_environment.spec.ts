@@ -61,6 +61,9 @@ describe('parse_application_environment', () => {
       internal_storage_webhook_secret:
         VALID_RAW_ENVIRONMENT.INTERNAL_STORAGE_WEBHOOK_SECRET,
       minio_endpoint: VALID_RAW_ENVIRONMENT.MINIO_ENDPOINT,
+      // Absente de l'environnement valide : elle est FACULTATIVE, et le
+      // developpement joint MinIO par la meme adresse que le navigateur.
+      minio_public_endpoint: undefined,
       clamav_endpoint: VALID_RAW_ENVIRONMENT.CLAMAV_ENDPOINT,
       minio_root_user: VALID_RAW_ENVIRONMENT.MINIO_ROOT_USER,
       minio_root_password: VALID_RAW_ENVIRONMENT.MINIO_ROOT_PASSWORD,
@@ -72,6 +75,27 @@ describe('parse_application_environment', () => {
       worker_metrics_port: DEFAULT_WORKER_METRICS_PORT,
       demo_lawyer_password: VALID_RAW_ENVIRONMENT.DEMO_LAWYER_PASSWORD,
     });
+  });
+
+  it("l'endpoint public de MinIO est retenu quand il est fourni", () => {
+    const application_environment = parse_application_environment({
+      ...VALID_RAW_ENVIRONMENT,
+      MINIO_PUBLIC_ENDPOINT: 'https://portail.example',
+    });
+
+    expect(application_environment.minio_public_endpoint).toBe('https://portail.example');
+  });
+
+  it("un endpoint public de MinIO illisible est refuse au demarrage", () => {
+    // Laisser passer reporterait l'echec au premier depot d'un client, des
+    // heures apres l'installation, sous la forme d'une URL pre-signee que le
+    // navigateur ne sait pas joindre.
+    expect(() =>
+      parse_application_environment({
+        ...VALID_RAW_ENVIRONMENT,
+        MINIO_PUBLIC_ENDPOINT: 'pas-une-url',
+      }),
+    ).toThrow(InvalidEnvironmentError);
   });
 
   it.each(REQUIRED_ENVIRONMENT_VARIABLES)(

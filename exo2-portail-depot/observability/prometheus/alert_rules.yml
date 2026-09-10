@@ -121,3 +121,70 @@ groups:
           severity: avertissement
         annotations:
           summary: "Une piece deposee portait une signature connue"
+
+  # Le proxy est la seule surface qui voit ce que l'EXTERIEUR recoit. Ces regles
+  # ne doublonnent pas `ServiceInjoignable` : une cible peut repondre a la
+  # collecte et rendre malgre tout des erreurs a ses visiteurs, et un certificat
+  # peut expirer sur une pile ou tout est vert.
+  - name: portail_proxy
+    rules:
+      # Un 5xx rendu PAR TRAEFIK, c'est-a-dire ce que le visiteur a vraiment vu.
+      # L'application ne compte que les requetes qu'elle a traitees : celles que
+      # le proxy n'a pas pu lui transmettre — service injoignable, redemarrage,
+      # depassement de delai — n'existent dans aucune de ses series.
+      #
+      # L'etiquette de routeur est ce qui rend l'alerte actionnable : elle dit
+      # laquelle des quatre surfaces est tombee. Sans
+      # `addRoutersLabels`, on saurait qu'il y a des erreurs sans savoir ou.
+      #
+      # Un dixieme de requete par seconde sur cinq minutes, soit une trentaine
+      # d'erreurs : au-dessus du 5xx isole qu'un redemarrage produit, largement
+      # en dessous d'une panne franche.
+      - alert: ProxyRendDesErreurs
+        expr: sum by (router) (rate(traefik_router_requests_total{code=~"5.."}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: critique
+        annotations:
+          summary: "Le routeur {{ $labels.router }} rend des erreurs serveur"
+          description: >-
+            Traefik rend {{ $value | printf "%.2f" }} erreur(s) 5xx par seconde
+            sur {{ $labels.router }} depuis cinq minutes. C'est ce que le
+            visiteur voit, que l'application le sache ou non.
+
+      # Le renouvellement ACME est automatique, donc sa panne est SILENCIEUSE
+      # jusqu'a l'expiration — le jour ou plus personne n'entre. Traefik renouvelle
+      # a trente jours de l'echeance ; s'il reste moins de quatorze jours, c'est
+      # qu'il a deja essaye et echoue, et il reste deux semaines pour comprendre.
+      #
+      # Cette serie n'existe QUE sur un deploiement en TLS : en local, le portail
+      # ecoute en clair et il n'y a aucun certificat a surveiller. Une regle qui
+      # ne s'evalue sur rien ne se declenche pas, ce qui est exactement le
+      # comportement voulu ici — et non un trou de couverture.
+      - alert: CertificatBientotExpire
+        expr: (traefik_tls_certs_not_after - time()) < 14 * 24 * 3600
+        for: 1h
+        labels:
+          severity: critique
+        annotations:
+          summary: "Le certificat TLS expire dans moins de quatorze jours"
+          description: >-
+            Traefik aurait du le renouveler a trente jours. Verifier le journal
+            du challenge ACME et le quota de l'autorite — le staging et la
+            production ont des quotas distincts.
+
+      # Un rechargement de configuration qui echoue laisse Traefik servir la
+      # PRECEDENTE, sans rien dire : le fichier de routage vient d'etre reecrit,
+      # il est invalide, et le portail continue de fonctionner comme avant. La
+      # panne n'apparait qu'au redemarrage suivant, longtemps apres la cause.
+      - alert: RoutageDuProxyRefuse
+        expr: increase(traefik_config_reloads_total[15m]) > 0 and (time() - traefik_config_last_reload_success) > 900
+        for: 5m
+        labels:
+          severity: avertissement
+        annotations:
+          summary: "Traefik a recharge sa configuration sans succes"
+          description: >-
+            Un rechargement a eu lieu dans le dernier quart d'heure mais le
+            dernier SUCCES est plus ancien : le routage servi n'est pas celui du
+            fichier.

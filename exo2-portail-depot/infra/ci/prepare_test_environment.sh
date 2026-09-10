@@ -55,6 +55,26 @@ TRUSTED_PROXY_HOP_COUNT="0"
 WORKER_METRICS_PORT="9101"
 ENVIRONMENT
 
+# Compose ne lit PAS ce fichier tout seul. Son repertoire de projet est celui du
+# fichier compose, donc `infra/` : il y chercherait un `infra/.env` qui n'existe
+# pas, interpolerait des chaines vides partout, et Postgres demarrerait sans mot
+# de passe. C'est install.sh qui fait deja exactement ceci, pour la meme raison.
+set -a
+# shellcheck disable=SC1091
+. ./.env
+set +a
+
+# Les conteneurs tournent en 1000:1000 et ecrivent dans des bind mounts. Docker
+# cree un repertoire de montage manquant en ROOT, et l'utilisateur d'un runner
+# GitHub est `runner` (uid 1001) : dans les deux cas Postgres ne peut pas creer
+# son PGDATA, et la panne ne se voit qu'au bout des sept minutes d'attente de
+# sante. On cree donc les repertoires ici, avec le bon proprietaire, avant le
+# premier demarrage.
+mkdir -p data/postgres data/minio
+if [[ "$(id -u)" != "1000" ]]; then
+  sudo chown -R 1000:1000 data
+fi
+
 # La surcouche de developpement, et elle seule : c'est elle qui publie les ports
 # de Postgres, MinIO et clamav sur la boucle locale. Sans elle ces services sont
 # sur des reseaux internes et rien, sur l'hote, ne peut les joindre.

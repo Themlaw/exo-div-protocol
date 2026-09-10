@@ -1,11 +1,11 @@
 import type { ReactElement } from 'react';
 import { Navigate } from 'react-router-dom';
 
+import { ClientDepositScreen } from '../screens/client_deposit';
 import { DepositRequestDashboardScreen } from '../screens/deposit_request_dashboard';
 import { LawyerLoginScreen } from '../screens/lawyer_login';
 import { MyDepositRequestsScreen } from '../screens/my_deposit_requests';
 import { NewDepositRequestScreen } from '../screens/new_deposit_request';
-import { ScreenUnderConstruction } from '../screens/screen_under_construction';
 import { RequireLawyerSession } from './require_lawyer_session';
 
 export const LAWYER_LOGIN_PATH = '/login';
@@ -58,7 +58,7 @@ export const FRONT_ROUTES: readonly FrontRouteDeclaration[] = [
   },
   {
     path: CLIENT_DEPOSIT_PATH,
-    element: <ScreenUnderConstruction screen_name="Depot de pieces" />,
+    element: <ClientDepositScreen />,
   },
 ];
 

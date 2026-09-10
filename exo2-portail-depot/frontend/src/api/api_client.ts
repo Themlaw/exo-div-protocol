@@ -11,10 +11,21 @@ export const API_BASE_PATH = '/api/v1';
 export type ApiFailureKind =
   | 'rejected_payload'
   | 'unauthenticated'
+  | 'forbidden'
   | 'not_found'
+  | 'conflict'
   | 'file_not_downloadable'
+  | 'refused_upload'
+  | 'rate_limited'
   | 'network_unavailable'
   | 'unexpected';
+
+// Les deux seuls refus d'envoi que le backend EXPLIQUE, et il les explique parce
+// que le client peut y remedier : changer de fichier, ou en prendre un plus
+// leger. Tous les autres restent muets.
+export type UploadRefusal =
+  | { readonly reason: 'mime_type_not_allowed'; readonly allowed_mime_types: readonly string[] }
+  | { readonly reason: 'declared_size_above_limit'; readonly max_size_bytes: number };
 
 export class ApiFailure extends Error {
   readonly kind: ApiFailureKind;
@@ -24,12 +35,19 @@ export class ApiFailure extends Error {
   // d'un coup, a dessein : l'avocat qui decrit dix documents corrige en une
   // passe au lieu de decouvrir ses erreurs une par une.
   readonly violations: readonly string[];
+  // Le delai annonce par `Retry-After`. C'est le SEUL refus qui s'explique cote
+  // client anonyme, parce qu'il parle de son adresse et non du lien : sans lui,
+  // un destinataire legitime redemanderait un lien au lieu de patienter.
+  readonly retry_after_seconds: number | null;
+  readonly upload_refusal: UploadRefusal | null;
 
   constructor(details: {
     kind: ApiFailureKind;
     http_status: number | null;
     blocking_file_status?: DepositedFileStatus | null;
     violations?: readonly string[];
+    retry_after_seconds?: number | null;
+    upload_refusal?: UploadRefusal | null;
   }) {
     super(details.kind);
     this.name = 'ApiFailure';
@@ -37,6 +55,8 @@ export class ApiFailure extends Error {
     this.http_status = details.http_status;
     this.blocking_file_status = details.blocking_file_status ?? null;
     this.violations = details.violations ?? [];
+    this.retry_after_seconds = details.retry_after_seconds ?? null;
+    this.upload_refusal = details.upload_refusal ?? null;
   }
 }
 
@@ -94,11 +114,39 @@ async function read_api_failure(response: Response): Promise<ApiFailure> {
     });
   }
 
+  if (response.status === 403) {
+    return new ApiFailure({ kind: 'forbidden', http_status: 403 });
+  }
+
   if (response.status === 409) {
+    // Un 409 QUI PORTE un statut de piece est un refus de telechargement : la
+    // piece appartient bien a l'avocat, et c'est ce statut qui lui permet de
+    // lire « en quarantaine » plutot que « introuvable ». Les autres 409 —
+    // emplacement occupe, demande gelee — n'en portent pas.
+    const blocking_file_status: DepositedFileStatus | null = read_blocking_file_status(
+      await read_error_body(response),
+    );
+
     return new ApiFailure({
-      kind: 'file_not_downloadable',
+      kind: blocking_file_status === null ? 'conflict' : 'file_not_downloadable',
       http_status: 409,
-      blocking_file_status: read_blocking_file_status(await read_error_body(response)),
+      blocking_file_status,
+    });
+  }
+
+  if (response.status === 422) {
+    return new ApiFailure({
+      kind: 'refused_upload',
+      http_status: 422,
+      upload_refusal: read_upload_refusal(await read_error_body(response)),
+    });
+  }
+
+  if (response.status === 429) {
+    return new ApiFailure({
+      kind: 'rate_limited',
+      http_status: 429,
+      retry_after_seconds: read_retry_after_seconds(response),
     });
   }
 
@@ -130,6 +178,37 @@ function read_violations(body: unknown): readonly string[] {
   return announced_violations.filter(
     (violation: unknown): violation is string => typeof violation === 'string',
   );
+}
+
+function read_retry_after_seconds(response: Response): number | null {
+  const announced_delay: number = Number.parseInt(
+    response.headers.get('retry-after') ?? '',
+    10,
+  );
+
+  return Number.isSafeInteger(announced_delay) && announced_delay >= 0 ? announced_delay : null;
+}
+
+function read_upload_refusal(body: unknown): UploadRefusal | null {
+  if (typeof body !== 'object' || body === null) {
+    return null;
+  }
+
+  const { reason, allowed_mime_types, max_size_bytes } = body as Record<string, unknown>;
+
+  if (
+    reason === 'mime_type_not_allowed' &&
+    Array.isArray(allowed_mime_types) &&
+    allowed_mime_types.every((mime_type: unknown): boolean => typeof mime_type === 'string')
+  ) {
+    return { reason, allowed_mime_types: allowed_mime_types as readonly string[] };
+  }
+
+  if (reason === 'declared_size_above_limit' && Number.isSafeInteger(max_size_bytes)) {
+    return { reason, max_size_bytes: max_size_bytes as number };
+  }
+
+  return null;
 }
 
 function read_blocking_file_status(body: unknown): DepositedFileStatus | null {

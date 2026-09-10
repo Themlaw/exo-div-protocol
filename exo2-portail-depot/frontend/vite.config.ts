@@ -18,6 +18,11 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    // Deux processus, pas un par coeur : dix environnements jsdom lances
+    // ensemble affament la machine, et `userEvent` — qui attend en horloge
+    // reelle entre deux frappes — se met alors a depasser ses delais. Une suite
+    // dont le resultat depend de la charge ne prouve rien.
+    maxWorkers: 2,
     environment: 'jsdom',
     setupFiles: ['./test/setup.ts'],
     include: ['test/**/*.spec.ts', 'test/**/*.spec.tsx'],

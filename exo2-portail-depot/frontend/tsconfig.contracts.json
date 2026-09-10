@@ -1,0 +1,21 @@
+{
+  // Le test de derive est le SEUL fichier du front qui lise des sources du
+  // backend. Il a son propre tsconfig parce que la rigueur du front n'a pas a
+  // s'appliquer au backend : `noUncheckedIndexedAccess` et
+  // `exactOptionalPropertyTypes` sont des choix de CE projet-ci, et les imposer
+  // a l'autre ferait echouer un typecheck qui n'a rien a voir avec la derive.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "noUnusedLocals": false,
+    "verbatimModuleSyntax": false,
+    "moduleResolution": "bundler"
+  },
+  // `exclude` est redeclare, et pas par coquetterie : il est herite du
+  // tsconfig de base, qui ecarte justement ce fichier — et un `exclude` hérité
+  // filtre l'`include` local. Sans cette ligne, ce projet ne compile aucun
+  // fichier et le test de derive passe toujours, sans rien verifier.
+  "exclude": [],
+  "include": ["src/api/contracts.ts", "test/api/contracts_drift.spec.ts"]
+}

@@ -35,7 +35,17 @@ import {
   ACCESS_LINK_TOKEN_HASHER,
   type AccessLinkTokenHasher,
 } from '../access_link/access_link_token_hasher';
-import { resolve_public_access_link_state, type PublicAccessLinkState } from '../domain/access_link';
+import {
+  resolve_public_access_link_state,
+  type PublicAccessLinkState,
+} from '../domain/access_link';
+import type {
+  ClientDepositBoardView,
+  ClientDepositedFileView,
+  ClientExpectedDocumentView,
+  ClientUploadTicketView,
+  PublicAccessLinkView,
+} from './client_deposit_views';
 import {
   CLIENT_DEPOSIT_SESSION_LIFETIME_SECONDS,
   DEPOSIT_LINK_UNLOCKER,
@@ -74,55 +84,10 @@ import {
   type ClientUploadAuthorizer,
 } from '../deposited_file/authorize_client_upload';
 
-// Ce que le client anonyme a le droit de savoir AVANT le PIN : l'etat, et la
-// longueur du code pour dessiner la saisie. Ni titre, ni nombre de pieces, ni
-// nom de dossier — la longueur, elle, est deja sous les yeux du destinataire
-// legitime dans le message qu'il a recu.
-interface PublicAccessLinkView {
-  state: PublicAccessLinkState;
-  pin_length?: number;
-}
-
 // Le corps du refus, IDENTIQUE pour toutes les causes : token inconnu, lien
 // expire, lien revoque, PIN faux, PIN de mauvaise longueur. Distinguer
 // reviendrait a repondre « ce token existe » a qui en essaie au hasard.
 const GENERIC_REFUSAL_BODY = { state: 'invalid' } as const;
-
-// Ce que le client voit une fois le PIN passe. Le titre apparait ICI et pas
-// avant : sur la page d'accueil du lien il serait une fuite, derriere le PIN il
-// est ce qui permet de savoir quel dossier on ouvre.
-interface ClientDepositBoardView {
-  title: string;
-  deposit_request_status: DepositRequestStatus;
-  session_expires_at: string;
-  expected_documents: readonly ClientExpectedDocumentView[];
-}
-
-// Ce que le navigateur poste ensuite, tel quel, vers MinIO.
-interface ClientUploadTicketView {
-  deposited_file_id: string;
-  upload_url: string;
-  form_fields: Readonly<Record<string, string>>;
-  expires_at: string;
-}
-
-interface ClientExpectedDocumentView {
-  id: string;
-  label: string;
-  position: number;
-  allowed_mime_types: readonly string[];
-  max_size_bytes: number;
-  // `null` tant que l'emplacement est libre. Seule la piece qui l'OCCUPE est
-  // rendue : une reservation dont l'objet n'est jamais arrive ne doit pas
-  // s'afficher comme un depot reussi.
-  deposited_file: ClientDepositedFileView | null;
-}
-
-interface ClientDepositedFileView {
-  id: string;
-  display_filename: string;
-  status: string;
-}
 
 // L'acces est declare PAR METHODE et non sur la classe : ce controleur porte
 // deux surfaces qui n'ont rien a voir — deux routes anonymes, ou le jeton et le

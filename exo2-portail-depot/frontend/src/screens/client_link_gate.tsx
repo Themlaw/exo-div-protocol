@@ -103,14 +103,18 @@ function PinForm({
   }
 
   function submit_pin(): void {
-    unlock.mutate(digits.join(''), {
-      onError: (): void => {
-        // Les cases sont vidées : laisser le code faux en place ferait renvoyer
-        // le meme, et chaque essai compte pour le blocage.
-        set_digits(Array<string>(pin_length).fill(''));
-        box_refs.current[0]?.focus();
-      },
-    });
+    const submitted_pin: string = digits.join('');
+
+    // Vidées ICI, a l'envoi, et non a l'arrivee de la reponse. Laisser le code
+    // en place ferait renvoyer le meme, et chaque essai compte pour le blocage ;
+    // mais le vider a la reponse l'efface SOUS LES DOIGTS du client qui a deja
+    // recommence a taper — le temps d'aller-retour n'est pas le notre, il est
+    // celui de sa connexion. Le bouton resterait alors desactive sur des cases
+    // qu'il vient de remplir, sans que rien ne l'explique.
+    set_digits(Array<string>(pin_length).fill(''));
+    box_refs.current[0]?.focus();
+
+    unlock.mutate(submitted_pin);
   }
 
   const is_rate_limited: boolean =

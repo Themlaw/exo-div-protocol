@@ -89,6 +89,48 @@ describe('Porte du lien de depot', () => {
     }
   });
 
+  it('vide les cases des l envoi et ne touche plus a ce que le client tape ensuite', async () => {
+    let refuse_the_code!: () => void;
+    const refusal = new Promise<Response>((resolve) => {
+      refuse_the_code = (): void => {
+        resolve(json_response(401, { state: 'invalid' }));
+      };
+    });
+    answer_with({ state: 'active', pin_length: 6 }, { unlock: refusal });
+
+    render_client_deposit();
+    await screen.findAllByRole('textbox', { name: /^Chiffre / });
+    await type_the_whole_code('482715');
+    await userEvent.click(screen.getByRole('button', { name: 'Ouvrir le depot' }));
+
+    // Le code parti est bien celui qui etait affiche : le vider au moment de
+    // l'envoi ne doit pas le vider AVANT de le lire.
+    // Egalite stricte, et non « contient » : un code de sept chiffres contient
+    // celui de six, et la comparaison laxiste laisserait passer l'erreur.
+    expect(unlock_submitted_pin()).toBe('482715');
+
+    // Vidées a l'ENVOI, pas a la reponse. Le code est parti et chaque essai
+    // compte, donc le laisser affiche ferait renvoyer le meme ; mais le vider a
+    // l'arrivee de la reponse l'effacerait SOUS LES DOIGTS du client qui a deja
+    // recommence a taper, et le bouton resterait desactive sur des cases qu'il
+    // vient pourtant de remplir.
+    for (const box of screen.getAllByRole('textbox', { name: /^Chiffre / })) {
+      expect(box).toHaveValue('');
+    }
+
+    await type_the_whole_code('900311');
+    refuse_the_code();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ce code ne correspond pas.');
+    expect(
+      screen
+        .getAllByRole('textbox', { name: /^Chiffre / })
+        .map((box) => (box as HTMLInputElement).value)
+        .join(''),
+    ).toBe('900311');
+    expect(screen.getByRole('button', { name: 'Ouvrir le depot' })).toBeEnabled();
+  });
+
   it('fait patienter plutot que redemander un lien quand l adresse est bridee', async () => {
     answer_with(
       { state: 'active', pin_length: 6 },
@@ -113,9 +155,20 @@ describe('Porte du lien de depot', () => {
     expect(screen.getByRole('button', { name: 'Ouvrir le depot' })).toBeDisabled();
   });
 
+  function unlock_submitted_pin(): unknown {
+    const unlock_call = fetch_spy.mock.calls.find(
+      ([input, init]) => String(input).endsWith('/unlock') && init?.method === 'POST',
+    );
+
+    return (JSON.parse(String(unlock_call?.[1]?.body ?? '{}')) as { pin?: unknown }).pin;
+  }
+
   function answer_with(
     link_state: PublicAccessLinkView,
-    responses: { readonly unlock?: Response } = {},
+    // Une PROMESSE est acceptee autant qu'une reponse : c'est ce qui permet de
+    // tenir un refus en suspens et d'observer ce que le client peut faire
+    // pendant qu'il attend.
+    responses: { readonly unlock?: Response | Promise<Response> } = {},
   ): void {
     fetch_spy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);

@@ -7,6 +7,9 @@ name: Verification
 on:
   push:
     branches: [main]
+    # Une etiquette `v1.2.3` publie les images sous `1.2.3` en plus de `latest` :
+    # c'est ce qui permet d'epingler une version connue et d'y revenir.
+    tags: ['v*']
   pull_request:
 
 # Un push qui en remplace un autre annule la verification en cours : ce depot
@@ -179,9 +182,11 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # Construites, jamais publiees : ce depot n'a pas de registre, et la
-      # question a laquelle ce job repond est « le deploiement compile-t-il
-      # encore ». L'image du front echoue si les contrats ont derive.
+      # Construites sans etre publiees, et sans attendre les suites de tests :
+      # la question a laquelle ce job repond est « le deploiement compile-t-il
+      # encore », et elle merite une reponse en quelques minutes sur une
+      # proposition de fusion. L'image du front echoue si les contrats ont
+      # derive. La publication, elle, est un autre job et attend les tests.
       - name: Image de l'application
         uses: docker/build-push-action@v6
         with:
@@ -197,5 +202,86 @@ jobs:
           context: .
           file: frontend/Dockerfile
           push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publication:
+    name: Publication des images sur GHCR
+    runs-on: ubuntu-24.04
+    # Jamais sur une proposition de fusion : `latest` doit designer ce que la
+    # branche principale contient, pas la derniere branche qui a ete poussee.
+    if: github.event_name == 'push'
+    # Une image publiee est celle que `install.sh` deploiera sans rien
+    # reconstruire : elle ne doit exister que si TOUTE la chaine est verte.
+    # Publier d'abord et verifier ensuite reviendrait a livrer le defaut.
+    needs: [backend, frontend, integration, bout_en_bout, observabilite, images]
+    permissions:
+      contents: read
+      # Le seul droit ajoute, et il expire avec le job. C'est la raison du choix
+      # de GHCR : aucun jeton de longue duree ne dort dans les secrets du depot.
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Authentification au registre
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Le nom du depot peut porter des majuscules, jamais le nom d'une image :
+      # le registre refuserait la reference.
+      - name: Nom des images
+        id: noms
+        run: echo "prefixe=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      # `latest` sur la branche principale, plus le numero de version quand
+      # l'etiquette en porte un. Le commit exact n'est PAS une etiquette de plus
+      # — il voyage dans le label `revision`, ou il repond a « quel code tourne
+      # dans cette image » sans encombrer la liste des versions.
+      - name: Etiquettes
+        id: metadonnees
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.noms.outputs.prefixe }}/app
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Image de l'application
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: ${{ steps.metadonnees.outputs.tags }}
+          labels: ${{ steps.metadonnees.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Etiquettes du front
+        id: metadonnees_front
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.noms.outputs.prefixe }}/web
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Image du front
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: true
+          tags: ${{ steps.metadonnees_front.outputs.tags }}
+          labels: ${{ steps.metadonnees_front.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

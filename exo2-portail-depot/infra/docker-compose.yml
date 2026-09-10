@@ -243,12 +243,10 @@ services:
       - proxied
 
   app:
-    # Construite depuis la RACINE : le front a besoin de `infra/nginx`, et un
-    # contexte par service obligerait a le recopier.
-    build:
-      context: ..
-      dockerfile: backend/Dockerfile
-    image: ${IMAGE_REPOSITORY:-portail-depot}/app:${IMAGE_TAG:-local}
+    # TIREE, jamais construite ici : ce fichier est celui du deploiement, et une
+    # image publiee est la seule qui ait passe la chaine de verification. La
+    # construction locale vit dans la surcouche de developpement.
+    image: ${IMAGE_REPOSITORY:-ghcr.io/themlaw/exo2-portail-depot}/app:${IMAGE_TAG:-latest}
     restart: unless-stopped
     user: "1000:1000"
     read_only: true
@@ -312,10 +310,7 @@ services:
     # LA MEME image que l'application, un point d'entree different : le worker
     # partage tout le domaine — statuts, journal, stockage — et deux images
     # divergeraient au premier correctif applique d'un seul cote.
-    build:
-      context: ..
-      dockerfile: backend/Dockerfile
-    image: ${IMAGE_REPOSITORY:-portail-depot}/app:${IMAGE_TAG:-local}
+    image: ${IMAGE_REPOSITORY:-ghcr.io/themlaw/exo2-portail-depot}/app:${IMAGE_TAG:-latest}
     restart: unless-stopped
     user: "1000:1000"
     read_only: true
@@ -354,10 +349,7 @@ services:
       - observability
 
   web:
-    build:
-      context: ..
-      dockerfile: frontend/Dockerfile
-    image: ${IMAGE_REPOSITORY:-portail-depot}/web:${IMAGE_TAG:-local}
+    image: ${IMAGE_REPOSITORY:-ghcr.io/themlaw/exo2-portail-depot}/web:${IMAGE_TAG:-latest}
     restart: unless-stopped
     user: "1000:1000"
     read_only: true

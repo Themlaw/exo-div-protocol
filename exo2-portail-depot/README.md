@@ -58,8 +58,8 @@ git clone <ce dépôt> && cd exo2-portail-depot
 ```
 
 **Aucune question n'est posée.** Le script génère tous les secrets, prépare les
-répertoires, construit les images, démarre la pile, attend que chaque service
-soit sain, et affiche les URL. Les migrations, la création des buckets, le compte
+répertoires, tire les images publiées, démarre la pile, attend que chaque
+service soit sain, et affiche les URL. Les migrations, la création des buckets, le compte
 avocat et la demande de démonstration se jouent **au démarrage de
 l'application**, pas dans une commande séparée : après une installation,
 personne n'a de terminal à ouvrir, et une étape qu'on oublie de lancer est une
@@ -189,6 +189,37 @@ journal, stockage — et deux images divergeraient au premier correctif appliqu�
 d'un seul côté. Ils se distinguent par leur point d'entrée, et par ce qu'ils
 servent : l'API répond aux requêtes, le worker n'en sert aucune et ne rejoint
 donc jamais le réseau du proxy.
+
+**Le déploiement tire, le développement construit.** `infra/docker-compose.yml`
+ne contient aucune directive `build` : il désigne `ghcr.io/themlaw/exo2-portail-depot/app`
+et `.../web`. L'image publiée est la seule à avoir traversé toute la chaîne de
+vérification ; une construction locale ne prouve que ce que la machine avait
+sous la main ce jour-là. La surcouche `infra/docker-compose.dev.yml` rend leur
+`build` aux trois services, pour essayer un correctif avant de le publier :
+
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml build app web
+```
+
+**Pourquoi GHCR et pas Docker Hub.** Deux raisons, et la première est un risque
+qu'on ne maîtrise pas. Docker Hub plafonne les téléchargements anonymes par
+adresse IP ; une installation lancée depuis un réseau partagé dont le quota est
+déjà consommé échoue sur un `toomanyrequests`, c'est-à-dire sur la seule chose
+que l'installation ne peut pas réparer elle-même. GHCR n'impose pas ce plafond
+sur un paquet public. La seconde est un choix de sécurité : le travail de
+publication s'authentifie avec le jeton que GitHub fabrique pour la durée du
+job, avec la seule permission `packages: write`. Aucun secret de longue durée ne
+dort dans le dépôt. Le prix payé est un nom d'image plus long, et un piège qu'il
+faut connaître — **un paquet poussé pour la première fois est privé par
+défaut**, et il faut le passer public à la main, une fois. C'est vérifié ici par
+un `docker logout` suivi d'un `docker pull`, parce que le vérifier depuis une
+machine déjà authentifiée ne vérifie rien.
+
+**Étiquettes.** `latest` suit la branche principale. Une étiquette git `v1.2.3`
+publie en plus `1.2.3`, ce qui permet d'épingler une version et d'y revenir
+(`IMAGE_TAG=1.2.3 ./install.sh`). Le commit exact n'est pas une étiquette de
+plus : il voyage dans le label `org.opencontainers.image.revision`, où il répond
+à « quel code tourne dans cette image » sans encombrer la liste des versions.
 
 **Cinq réseaux, dont un seul atteint Internet.** `edge` ne porte que Traefik ;
 `proxied`, `datastore` et `observability` sont `internal: true`, ce qui coupe
@@ -591,9 +622,15 @@ ne regardait rien.
 `.github/workflows/ci.yml` — six travaux : analyse statique et unitaires
 backend, types et unitaires front, intégration, **Playwright dans son propre
 travail**, règles d'alerte, et construction des deux images. Les séparer donne le retour rapide
-tout de suite au lieu de le faire attendre derrière le plus lent. Les images
-sont construites, jamais publiées : la question à laquelle ce travail répond est
-« le déploiement compile-t-il encore ».
+tout de suite au lieu de le faire attendre derrière le plus lent. Sur une
+proposition de fusion, les images sont construites sans être publiées : la
+question à laquelle ce travail répond est « le déploiement compile-t-il
+encore », et elle mérite une réponse en quelques minutes.
+
+Un septième travail, `publication`, pousse les deux images sur GHCR — mais
+**uniquement sur la branche principale, et uniquement derrière tous les
+autres**. Une image publiée est celle que `./install.sh` déploiera sans rien
+reconstruire : la publier avant d'avoir vérifié reviendrait à livrer le défaut.
 
 ---
 

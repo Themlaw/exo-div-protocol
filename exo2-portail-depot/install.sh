@@ -121,6 +121,13 @@ readonly DEMO_LAWYER_PASSWORD_DEFAULT="atelier balise carnet dossier facade"
 # s'ouvre qu'avec une sortie de terminal que l'evaluateur n'a plus.
 readonly GRAFANA_ADMIN_PASSWORD_DEFAULT="courbe seuil mesure alerte tableau"
 
+# Les images sont TIREES, jamais construites ici : celle qui est publiee est la
+# seule a avoir passe la chaine de verification, alors qu'une construction locale
+# ne prouve que ce que la machine avait sous la main ce jour-la. `latest` suit la
+# branche principale ; IMAGE_TAG="1.2.3" epingle une version publiee.
+readonly IMAGE_REPOSITORY_DEFAULT="ghcr.io/themlaw/exo2-portail-depot"
+readonly IMAGE_TAG_DEFAULT="latest"
+
 if [[ -f "${ENVIRONMENT_FILE}" ]]; then
   announce "Fichier .env deja present : il est conserve tel quel"
   detail "Supprimez-le pour regenerer tous les secrets."
@@ -207,6 +214,9 @@ DEMO_LAWYER_PASSWORD="${demo_lawyer_password}"
 
 TRUSTED_PROXY_HOP_COUNT="1"
 WORKER_METRICS_PORT="9101"
+
+IMAGE_REPOSITORY="$(configured_or_default IMAGE_REPOSITORY "${IMAGE_REPOSITORY_DEFAULT}")"
+IMAGE_TAG="$(configured_or_default IMAGE_TAG "${IMAGE_TAG_DEFAULT}")"
 ENVIRONMENT
   umask 022
   chmod 600 "${ENVIRONMENT_FILE}"
@@ -285,10 +295,17 @@ render_traefik_routing() {
 render_traefik_routing
 detail "Routage Traefik rendu pour ${PUBLIC_HOSTNAME} (${PUBLIC_BASE_URL})"
 
-# --- Construction et demarrage ----------------------------------------------
+# --- Images et demarrage ----------------------------------------------------
 
-announce "Construction des images"
-docker compose -f "${COMPOSE_FILE}" build
+announce "Recuperation des images"
+# Tirees explicitement plutot que laissees a `up -d` : quand un registre est
+# injoignable ou un paquet reste prive, `up` melange l'echec de telechargement
+# aux messages de demarrage des autres services. Ici la panne a sa propre ligne,
+# et le message dit quoi faire.
+docker compose -f "${COMPOSE_FILE}" pull ||
+  fail "Impossible de recuperer les images depuis ${IMAGE_REPOSITORY:-${IMAGE_REPOSITORY_DEFAULT}}.
+       Verifiez l'acces reseau au registre. Pour construire depuis ces sources a la place :
+       docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml build app web"
 
 announce "Demarrage de la pile"
 # UNIQUEMENT le fichier de base : la surcouche de developpement publie des ports

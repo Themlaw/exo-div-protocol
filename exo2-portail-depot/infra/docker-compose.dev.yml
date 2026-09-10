@@ -10,8 +10,31 @@
 # second reseau non interne pour que l'hote puisse les joindre. Ils y regagnent
 # donc un acces sortant. C'est acceptable en local, ou le modele de menace n'est
 # pas celui du serveur partage — mais c'est bien une protection en moins.
+#
+# Elle rend aussi aux trois services applicatifs leur `build:`. Le fichier de
+# base ne fait que TIRER des images publiees : c'est ce qui garantit que le
+# deploiement lance exactement ce que la chaine de verification a valide, et non
+# ce que la machine avait sous la main. Construire reste indispensable ici, pour
+# essayer un correctif avant de le publier.
 
 services:
+  # Construites depuis la RACINE : le front a besoin de `infra/nginx`, et un
+  # contexte par service obligerait a le recopier.
+  app:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+
+  worker:
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+
+  web:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+
   postgres:
     networks:
       - datastore

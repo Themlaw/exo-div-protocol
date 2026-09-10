@@ -21,7 +21,14 @@ services:
     # Version epinglee au correctif : `17-alpine` glisserait d'un `docker pull` a l'autre.
     image: postgres:17.11-alpine
     restart: unless-stopped
-    user: "1000:1000"
+    # L'uid de CELUI QUI A LANCE install.sh, et non un 1000 fige. Les
+    # repertoires sous ./data sont crees par ce script, donc lui appartiennent :
+    # un conteneur qui ecrit dedans doit porter le meme uid, sinon il se heurte a
+    # un refus de permission que rien sur la machine ne peut reparer sans root.
+    # Le defaut a 1000 sert au cas ou compose est lance sans passer par le
+    # script. La propriete de securite reste entiere — install.sh refuse de
+    # tourner en root, l'uid n'est donc jamais 0.
+    user: "${SERVICE_UID:-1000}:${SERVICE_GID:-1000}"
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -57,7 +64,7 @@ services:
     # exactement celle qu'on a testee en local.
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
-    user: "1000:1000"
+    user: "${SERVICE_UID:-1000}:${SERVICE_GID:-1000}"
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -170,7 +177,7 @@ services:
     # Majeure courante, epinglee au correctif comme tout le reste.
     image: prom/prometheus:v3.5.0
     restart: unless-stopped
-    user: "1000:1000"
+    user: "${SERVICE_UID:-1000}:${SERVICE_GID:-1000}"
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -201,7 +208,7 @@ services:
   grafana:
     image: grafana/grafana:12.1.1
     restart: unless-stopped
-    user: "1000:1000"
+    user: "${SERVICE_UID:-1000}:${SERVICE_GID:-1000}"
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -243,6 +250,10 @@ services:
       - proxied
 
   app:
+    # Reste en 1000:1000 la ou les services a donnees suivent l'uid appelant :
+    # celui-ci n'ecrit dans aucun repertoire de l'hote — il ne possede que les
+    # fichiers de son image, et un tmpfs pour le reste.
+    #
     # TIREE, jamais construite ici : ce fichier est celui du deploiement, et une
     # image publiee est la seule qui ait passe la chaine de verification. La
     # construction locale vit dans la surcouche de developpement.
@@ -374,7 +385,7 @@ services:
   traefik:
     image: traefik:v3.5.3
     restart: unless-stopped
-    user: "1000:1000"
+    user: "${SERVICE_UID:-1000}:${SERVICE_GID:-1000}"
     read_only: true
     security_opt:
       - no-new-privileges:true

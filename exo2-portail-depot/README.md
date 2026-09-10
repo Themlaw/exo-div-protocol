@@ -240,9 +240,19 @@ payer est réel : un service ne s'auto-déclare pas, il faut l'écrire dans le
 fichier. Sur une pile de quatre routeurs qui ne bougent pas, c'est un prix
 dérisoire face à ce qu'il achète.
 
-**Tous les conteneurs tournent en `1000:1000`**, en `read_only`, sans aucune
+**Aucun conteneur ne tourne en `root`**, tous sont en `read_only`, sans aucune
 capacité (`cap_drop: ALL`) et avec `no-new-privileges`. Ce qui doit écrire écrit
-dans un `tmpfs` borné. Traefik n'a **pas** le socket Docker : sa configuration
+dans un `tmpfs` borné.
+
+Les cinq services qui écrivent dans `./data` — Postgres, MinIO, Prometheus,
+Grafana, Traefik — portent l'**uid de l'utilisateur qui a lancé `./install.sh`**,
+et non un `1000` figé. C'est ce script qui crée ces répertoires, donc ils lui
+appartiennent : un conteneur qui y écrit doit porter le même uid, sinon il se
+heurte à un refus de permission que seul `root` pourrait réparer — et une
+installation en une commande n'a aucune raison d'exiger `root`. Le script refuse
+d'ailleurs de tourner en `root`, ce qui garantit que cet uid n'est jamais `0`.
+Les trois autres services n'écrivent dans aucun répertoire de l'hôte et gardent
+un uid fixe ; `clamav` porte celui que son image impose. Traefik n'a **pas** le socket Docker : sa configuration
 statique tient dans ses arguments, son routage dans un fichier monté en lecture
 seule. Donner le socket à un service exposé sur Internet, c'est lui donner la
 machine.

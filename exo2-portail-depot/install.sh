@@ -30,16 +30,21 @@ docker compose version >/dev/null 2>&1 ||
   fail "Le plugin « docker compose » est requis (Docker Compose v2)."
 detail "docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo '?')"
 
-# Les conteneurs tournent en 1000:1000 et ecrivent dans des bind mounts sous
-# ./data. Un uid different rendrait ces repertoires illisibles pour eux, et
-# Postgres refuserait de demarrer sans qu'on comprenne pourquoi.
+# Les services a donnees ecrivent dans des bind mounts sous ./data, que ce script
+# cree. Ils tournent donc sous l'uid de CELUI QUI LE LANCE, et non sous un 1000
+# fige : sur une machine ou l'utilisateur porte un autre uid, un conteneur en
+# 1000 se heurterait a un refus de permission sur des repertoires qui ne lui
+# appartiennent pas — et le reparer demanderait root, que cette installation n'a
+# aucune raison d'exiger.
 if [[ "$(id -u)" -eq 0 ]]; then
-  fail "N'executez pas ce script en root : les conteneurs tournent en 1000:1000 et les repertoires de donnees leur appartiendraient a tort."
+  fail "N'executez pas ce script en root : les repertoires de donnees appartiendraient a root, et plus personne d'autre ne pourrait les lire."
 fi
-if [[ "$(id -u)" -ne 1000 ]]; then
-  detail "Attention : votre uid est $(id -u) et non 1000. Les conteneurs ecrivent en 1000:1000 ;"
-  detail "si les repertoires sous ./data ne leur appartiennent pas, ajustez-les avec sudo chown -R 1000:1000 data"
-fi
+# Nommees d'apres CELUI QUI INVOQUE, et non d'apres la variable du compose
+# qu'elles alimentent : `. .env` relit ce fichier plus bas, et deux noms
+# identiques feraient echouer la lecture sur une variable en lecture seule.
+readonly INVOKING_UID="$(id -u)"
+readonly INVOKING_GID="$(id -g)"
+detail "les services a donnees tourneront en ${INVOKING_UID}:${INVOKING_GID}"
 
 # --- Generation des secrets -------------------------------------------------
 
@@ -217,6 +222,11 @@ WORKER_METRICS_PORT="9101"
 
 IMAGE_REPOSITORY="$(configured_or_default IMAGE_REPOSITORY "${IMAGE_REPOSITORY_DEFAULT}")"
 IMAGE_TAG="$(configured_or_default IMAGE_TAG "${IMAGE_TAG_DEFAULT}")"
+
+# L'uid qui possede ./data, donc celui sous lequel les services a donnees
+# doivent ecrire. Voir le commentaire en tete de ce script.
+SERVICE_UID="${INVOKING_UID}"
+SERVICE_GID="${INVOKING_GID}"
 ENVIRONMENT
   umask 022
   chmod 600 "${ENVIRONMENT_FILE}"

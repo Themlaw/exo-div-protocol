@@ -55,6 +55,10 @@ TRUSTED_PROXY_HOP_COUNT="0"
 WORKER_METRICS_PORT="9101"
 ENVIRONMENT
 
+# Ajoutees APRES le document : elles seules dependent de la machine, et un
+# heredoc en apostrophes ne substitue rien, a dessein.
+printf 'SERVICE_UID="%s"\nSERVICE_GID="%s"\n' "$(id -u)" "$(id -g)" >> .env
+
 # Compose ne lit PAS ce fichier tout seul. Son repertoire de projet est celui du
 # fichier compose, donc `infra/` : il y chercherait un `infra/.env` qui n'existe
 # pas, interpolerait des chaines vides partout, et Postgres demarrerait sans mot
@@ -64,16 +68,13 @@ set -a
 . ./.env
 set +a
 
-# Les conteneurs tournent en 1000:1000 et ecrivent dans des bind mounts. Docker
-# cree un repertoire de montage manquant en ROOT, et l'utilisateur d'un runner
-# GitHub est `runner` (uid 1001) : dans les deux cas Postgres ne peut pas creer
-# son PGDATA, et la panne ne se voit qu'au bout des sept minutes d'attente de
-# sante. On cree donc les repertoires ici, avec le bon proprietaire, avant le
-# premier demarrage.
+# Docker cree un repertoire de montage manquant en ROOT, et un conteneur non
+# privilegie ne pourrait alors pas y ecrire : on les cree donc ici, avant le
+# premier demarrage, et ils appartiennent de fait a l'utilisateur courant —
+# `runner` (uid 1001) sur un runner GitHub. C'est ce meme uid que les services
+# porteront, plus bas, si bien qu'aucun `chown` et donc aucun `sudo` n'est
+# necessaire.
 mkdir -p data/postgres data/minio
-if [[ "$(id -u)" != "1000" ]]; then
-  sudo chown -R 1000:1000 data
-fi
 
 # La surcouche de developpement, et elle seule : c'est elle qui publie les ports
 # de Postgres, MinIO et clamav sur la boucle locale. Sans elle ces services sont

@@ -37,6 +37,14 @@ test.describe('Depot depuis un telephone etroit', () => {
 
     const slot = client_page.getByRole('listitem', { name: 'Attestation' });
     await expect(slot).toBeVisible();
+
+    // Mesure AVANT le depot, et pas seulement apres : le declencheur de
+    // selection de fichier n'existe plus une fois la piece deposee. La seule
+    // mesure prise en fin de parcours regardait donc un ecran d'ou le controle
+    // le plus large avait disparu — c'est ainsi qu'un debordement de six pixels
+    // a traverse la chaine de verification sans etre vu.
+    await expect_no_horizontal_overflow(client_page);
+
     await slot.getByLabel('Choisir un fichier pour Attestation').setInputFiles(A_SMALL_PDF);
     await slot.getByRole('button', { name: 'Envoyer Attestation' }).click();
     await expect(slot.getByText('Deposee')).toBeVisible({ timeout: 60_000 });

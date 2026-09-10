@@ -67,8 +67,13 @@ export function AccessLinkDeliveryDialog({
       // l'ecran du champ d'action, au moment precis ou il ne faut rien faire
       // d'autre que copier ce message.
       bg="rgba(0, 0, 0, 0.55)"
-      alignItems="center"
+      // `flex-start` + `overflowY` plutot que `center` : un conteneur flex
+      // centre qui deborde rogne le HAUT de son enfant, et ce qu'on rognait
+      // ici c'etait le titre puis l'avertissement disant que le code ne sera
+      // plus jamais affiche. Sur un ecran de 844 px, cette popup en mesure 930.
+      alignItems="flex-start"
       justifyContent="center"
+      overflowY="auto"
       padding="4"
       zIndex="1000"
     >
@@ -82,6 +87,9 @@ export function AccessLinkDeliveryDialog({
         padding="6"
         maxWidth="34rem"
         width="100%"
+        // Recentre verticalement quand la place le permet, et laisse defiler
+        // sinon : `margin: auto` fait les deux la ou `align-items` doit choisir.
+        marginY="auto"
       >
         <Stack gap="2">
           <Heading size="md">Demande creee</Heading>

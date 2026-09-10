@@ -1,5 +1,5 @@
 import { useEffect, useState, type ChangeEvent, type ReactElement } from 'react';
-import { Flex, Heading, Stack, Text, chakra } from '@chakra-ui/react';
+import { Flex, Heading, Stack, Text, chakra, useRecipe } from '@chakra-ui/react';
 
 import { ApiFailure } from '../api/api_client';
 import type {
@@ -224,19 +224,40 @@ function UploadControls({
   readonly on_choose: (file: File | null) => void;
   readonly on_send: () => void;
 }): ReactElement {
+  const file_chooser = useRecipe({ key: 'fileChooser' });
+
   return (
     <Flex gap="3" alignItems="center" wrap="wrap">
-      {/* La selection est LOCALE, sans reseau : changer d'avis avant d'appuyer
-          ne coute rien et n'annule aucun transfert. */}
-      <chakra.input
-        type="file"
-        aria-label={`Choisir un fichier pour ${expected.label}`}
-        accept={expected.allowed_mime_types.join(',')}
-        disabled={is_frozen || is_sending}
-        onChange={(event: ChangeEvent<HTMLInputElement>): void => {
-          on_choose(event.target.files?.[0] ?? null);
-        }}
-      />
+      <Stack gap="1" flex="1 1 12rem" minWidth="0">
+        {/* Le label HABILLE l'input, il ne le remplace pas : l'input reste dans
+            le DOM, porte le nom accessible et ouvre le selecteur. Le masquer
+            visuellement plutot que le retirer garde intacts le clavier, les
+            lecteurs d'ecran et les tests qui le designent par ce nom. */}
+        <chakra.label css={file_chooser()}>
+          {/* La selection est LOCALE, sans reseau : changer d'avis avant
+              d'appuyer ne coute rien et n'annule aucun transfert. */}
+          <chakra.input
+            type="file"
+            srOnly
+            aria-label={`Choisir un fichier pour ${expected.label}`}
+            accept={expected.allowed_mime_types.join(',')}
+            disabled={is_frozen || is_sending}
+            onChange={(event: ChangeEvent<HTMLInputElement>): void => {
+              on_choose(event.target.files?.[0] ?? null);
+            }}
+          />
+          {chosen_file === null ? 'Choisir un fichier' : 'Changer de fichier'}
+        </chakra.label>
+
+        {/* Le nom du fichier choisi, que le controle natif affichait seul. Sans
+            lui le client ne peut plus verifier qu'il envoie le bon document. */}
+        {chosen_file === null ? null : (
+          <Text fontSize="sm" color="gray.default" truncate>
+            {chosen_file.name}
+          </Text>
+        )}
+      </Stack>
+
       <PrimaryButton
         disabled={chosen_file === null || is_sending || is_frozen}
         aria-label={`Envoyer ${expected.label}`}

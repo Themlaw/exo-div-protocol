@@ -125,6 +125,12 @@ function PinForm({
       <Heading size="lg">Depot de pieces</Heading>
       <Text>Saisissez le code recu avec ce lien.</Text>
 
+      {/* Les cases se PARTAGENT la largeur au lieu de l'imposer. A 3rem fixes,
+          six cases demandaient 360 px et la sixieme tombait seule sur une
+          deuxieme ligne des que l'ecran passait sous 360 : un code lu « cinq
+          chiffres puis un » invite a la faute de saisie. La borne basse garde
+          une cible tactile, et un code plus long — la politique en autorise
+          jusqu'a douze — se replie alors en lignes egales. */}
       <Flex gap="2" wrap="wrap">
         {digits.map((digit: string, index: number) => (
           <chakra.input
@@ -137,7 +143,9 @@ function PinForm({
             inputMode="numeric"
             autoComplete="one-time-code"
             aria-label={`Chiffre ${String(index + 1)}`}
-            width="3rem"
+            flex="1 1 0"
+            minWidth="2.25rem"
+            maxWidth="3rem"
             textAlign="center"
             value={digit}
             disabled={is_rate_limited}

@@ -81,6 +81,52 @@ export const secondary_button_recipe = defineRecipe({
   },
 });
 
+// Le declencheur de selection de fichier. Il existe parce que le controle natif
+// ne se laisse ni traduire ni contraindre : il s'annonce « Choose File / No file
+// chosen » en anglais au milieu d'une application francaise, il impose sa propre
+// largeur — 344 px, seule cause du defilement lateral du tableau de depot sous
+// 390 px — et il se dessine 30 px de haut, tres en dessous d'une cible tactile.
+// L'input reste dans le DOM, masque : c'est LUI qui porte le nom accessible et
+// qui ouvre le selecteur, ce label ne fait que l'habiller.
+export const file_chooser_recipe = defineRecipe({
+  base: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    width: '100%',
+    // Le seul reglage qui compte pour le mobile : le declencheur suit la largeur
+    // de sa carte au lieu de la dicter.
+    maxWidth: '100%',
+    bg: 'surface',
+    color: 'primary',
+    fontWeight: 'heading',
+    fontSize: 'md',
+    lineHeight: '1.2',
+    paddingInline: '24px',
+    paddingBlock: '14px',
+    borderRadius: 'full',
+    boxShadow: PRIMARY_INSET_OUTLINE,
+    cursor: 'pointer',
+    textAlign: 'center',
+    transition: 'background-color 0.18s ease',
+    _hover: { bg: 'accent.surface' },
+    // Le focus du LABEL ne se voit pas : c'est l'input masque qui le recoit.
+    '&:has(input:focus-visible)': {
+      outline: '2px solid',
+      outlineColor: 'primary',
+      outlineOffset: '2px',
+    },
+    // Un label ne connait pas `:disabled` : l'etat vient de l'input qu'il
+    // contient, seul a le porter reellement.
+    '&:has(input:disabled)': {
+      color: 'gray.default',
+      boxShadow: `inset 0 0 0 1px ${DIV_BASE_COLORS.gray_light}`,
+      cursor: 'not-allowed',
+    },
+  },
+});
+
 // « Cards : fond blanc, bordure 1px, radius 12px, SANS ombre. » L'absence
 // d'ombre est une regle de la charte, pas un oubli.
 export const card_recipe = defineRecipe({
@@ -266,6 +312,7 @@ export const DIV_RECIPES = {
   secondaryButton: secondary_button_recipe,
   card: card_recipe,
   statusPill: status_pill_recipe,
+  fileChooser: file_chooser_recipe,
   copyButton: copy_button_recipe,
   backLink: back_link_recipe,
   textField: text_field_recipe,

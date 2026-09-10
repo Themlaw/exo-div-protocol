@@ -45,6 +45,20 @@ describe('Envoi d une piece par le client', () => {
     vi.unstubAllGlobals();
   });
 
+  it('montre au client le nom du fichier qu il vient de choisir', async () => {
+    // Le controle natif affichait ce nom tout seul. Il est remplace par un
+    // declencheur habille — le natif s'annonce « Choose File » en anglais et
+    // impose sa largeur —, donc c'est a l'ecran de redire ce qui est choisi :
+    // sans ce nom, le client ne peut plus verifier qu'il envoie le bon fichier.
+    stub_client_deposit_api();
+    stub_xml_http_request();
+
+    render_client_deposit();
+    const slot: HTMLElement = await choose_a_file_for_the_identity_slot(a_pdf_named('cni.pdf'));
+
+    expect(within(slot).getByText('cni.pdf')).toBeInTheDocument();
+  });
+
   it('ne touche pas au reseau quand le client choisit son fichier', async () => {
     const fetch_spy = stub_client_deposit_api();
     stub_xml_http_request();

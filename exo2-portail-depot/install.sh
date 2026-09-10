@@ -136,6 +136,18 @@ readonly IMAGE_TAG_DEFAULT="latest"
 if [[ -f "${ENVIRONMENT_FILE}" ]]; then
   announce "Fichier .env deja present : il est conserve tel quel"
   detail "Supprimez-le pour regenerer tous les secrets."
+
+  # Les reglages APPARUS depuis sont neanmoins ajoutes. Un fichier ecrit par une
+  # version anterieure n'a pas de raison de connaitre SERVICE_UID, et le defaut
+  # du compose le ramenerait a 1000 : sur une machine ou l'utilisateur porte un
+  # autre uid, la panne se rejouerait a l'identique, et il faudrait avoir lu la
+  # documentation pour comprendre qu'il fallait effacer ce fichier. Les secrets
+  # deja tires, eux, ne sont jamais touches.
+  if ! grep -q '^SERVICE_UID=' "${ENVIRONMENT_FILE}"; then
+    printf '\nSERVICE_UID="%s"\nSERVICE_GID="%s"\n' "${INVOKING_UID}" "${INVOKING_GID}" \
+      >> "${ENVIRONMENT_FILE}"
+    detail "SERVICE_UID/SERVICE_GID manquaient : ajoutes (${INVOKING_UID}:${INVOKING_GID})."
+  fi
 else
   announce "Generation de la configuration et des secrets"
   detail "Aucune valeur n'est reprise de .env.example : un secret d'exemple deploye tel quel"

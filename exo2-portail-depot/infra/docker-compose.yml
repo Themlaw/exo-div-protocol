@@ -422,7 +422,7 @@ services:
       # Staging par defaut : le quota de certificats est par domaine et par
       # semaine, et ce domaine est PARTAGE entre les candidats. Basculer en
       # production se fait en vidant ACME_CA_SERVER, une fois que tout marche.
-      - --certificatesresolvers.letsencrypt.acme.caserver=${ACME_CA_SERVER:-https://acme-staging-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.letsencrypt.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
       - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
       - --accesslog=true
     volumes:

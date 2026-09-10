@@ -85,6 +85,38 @@ random_secret() {
 #
 #   PUBLIC_HOSTNAME=portail.exemple.fr ./install.sh
 #
+# Le sous-domaine du projet pointe vers UNE machine precise. Le prendre par
+# defaut partout ferait demander a Let's Encrypt un certificat pour un nom qui
+# ne resout pas vers l'hote qui le demande : le challenge echouerait, et
+# l'installation s'arreterait la — sur quiconque a simplement clone le depot.
+#
+# On ne retient donc ce nom que s'il designe VRAIMENT cette machine. Le test est
+# volontairement conservateur : au moindre doute — nom non resolu, outil absent,
+# adresse qui n'est sur aucune interface — on retombe en local, ou tout
+# fonctionne sans DNS ni certificat. Se tromper dans ce sens coute une variable
+# a passer ; se tromper dans l'autre casse l'installation.
+public_hostname_designe_cette_machine() {
+  local nom="$1" adresses_du_nom adresses_locales adresse
+
+  command -v getent >/dev/null 2>&1 || return 1
+  adresses_du_nom="$(getent ahostsv4 "${nom}" 2>/dev/null | awk '{print $1}' | sort -u)"
+  [[ -n "${adresses_du_nom}" ]] || return 1
+
+  if command -v ip >/dev/null 2>&1; then
+    adresses_locales="$(ip -o -4 addr show 2>/dev/null | awk '{split($4, a, "/"); print a[1]}')"
+  else
+    adresses_locales="$(hostname -I 2>/dev/null | tr ' ' '\n')"
+  fi
+  [[ -n "${adresses_locales}" ]] || return 1
+
+  while read -r adresse; do
+    [[ -n "${adresse}" ]] || continue
+    grep -qxF "${adresse}" <<< "${adresses_locales}" && return 0
+  done <<< "${adresses_du_nom}"
+
+  return 1
+}
+
 configured_or_default() {
   local variable_name="$1" default_value="$2"
   printf '%s' "${!variable_name:-${default_value}}"
@@ -95,7 +127,10 @@ configured_or_default() {
 # echouerait a le certifier, et l'installation « qui doit juste marcher »
 # echouerait sur la seule chose qui ne pouvait pas marcher. Le nom public se
 # donne au deploiement, par la variable ci-dessus.
-readonly DEFAULT_PUBLIC_HOSTNAME="localhost"
+# Le sous-domaine du deploiement. Il n'est retenu QUE s'il designe cette
+# machine — voir `public_hostname_designe_cette_machine`.
+readonly DEFAULT_PUBLIC_HOSTNAME="titouan-constance.stage2-div.rayan-drissi.com"
+readonly FALLBACK_PUBLIC_HOSTNAME="localhost"
 
 # Le proxy frontal de la machine partagee relaie deja 80 -> 22300 et
 # 443 -> 22301. Ces valeurs ne sont donc pas libres : en changer une sans changer
@@ -112,6 +147,14 @@ readonly DEFAULT_TRAEFIK_HTTPS_PORT="22301"
 # l'inscription du compte ACME echouerait, donc aucun certificat ne serait emis.
 # Un vrai deploiement met ici une boite qu'on releve.
 readonly DEFAULT_ACME_EMAIL="test@div.com"
+
+# L'URL est ECRITE en toutes lettres dans .env, dans un cas comme dans l'autre.
+# Faire porter le sens « autorite reelle » a une valeur VIDE serait un piege : le
+# compose lit `${ACME_CA_SERVER:-...}`, et cette forme retombe sur son defaut
+# pour une variable vide autant que pour une variable absente — on obtiendrait
+# donc du staging en croyant demander du reel.
+readonly ACME_PRODUCTION_CA="https://acme-v02.api.letsencrypt.org/directory"
+readonly ACME_STAGING_CA="https://acme-staging-v02.api.letsencrypt.org/directory"
 
 # Le compte de demonstration est FIXE et publie dans le README, contrairement a
 # tous les autres secrets de ce fichier. C'est un choix, et il se paie : ces
@@ -153,7 +196,18 @@ else
   detail "Aucune valeur n'est reprise de .env.example : un secret d'exemple deploye tel quel"
   detail "serait le meme chez tous ceux qui ont clone ce depot."
 
-  public_hostname="$(configured_or_default PUBLIC_HOSTNAME "${DEFAULT_PUBLIC_HOSTNAME}")"
+  # Un nom donne a la main l'emporte toujours, y compris pour forcer le local
+  # avec `PUBLIC_HOSTNAME=localhost ./install.sh`.
+  if [[ -n "${PUBLIC_HOSTNAME:-}" ]]; then
+    public_hostname="${PUBLIC_HOSTNAME}"
+  elif public_hostname_designe_cette_machine "${DEFAULT_PUBLIC_HOSTNAME}"; then
+    public_hostname="${DEFAULT_PUBLIC_HOSTNAME}"
+    detail "${DEFAULT_PUBLIC_HOSTNAME} designe cette machine : deploiement public."
+  else
+    public_hostname="${FALLBACK_PUBLIC_HOSTNAME}"
+    detail "${DEFAULT_PUBLIC_HOSTNAME} ne designe pas cette machine : installation locale."
+    detail "Pour deployer sous un autre nom : PUBLIC_HOSTNAME=<nom> ./install.sh"
+  fi
   traefik_http_port="$(configured_or_default TRAEFIK_HTTP_PORT "${DEFAULT_TRAEFIK_HTTP_PORT}")"
   traefik_https_port="$(configured_or_default TRAEFIK_HTTPS_PORT "${DEFAULT_TRAEFIK_HTTPS_PORT}")"
   acme_email="$(configured_or_default ACME_EMAIL "${DEFAULT_ACME_EMAIL}")"
@@ -198,9 +252,13 @@ PUBLIC_BASE_URL="${public_base_url}"
 TRAEFIK_HTTP_PORT="${traefik_http_port}"
 TRAEFIK_HTTPS_PORT="${traefik_https_port}"
 ACME_EMAIL="${acme_email}"
-# Staging par defaut : le quota de certificats est par domaine et par semaine, et
-# ce domaine est partage. Videz cette ligne une fois que tout fonctionne.
-ACME_CA_SERVER="$(configured_or_default ACME_CA_SERVER 'https://acme-staging-v02.api.letsencrypt.org/directory')"
+# L'autorite REELLE par defaut. Un certificat de staging donne un site qui
+# repond en HTTPS et qu'aucun navigateur n'accepte : le visiteur voit un
+# avertissement de securite, ce qui est pire qu'une panne franche puisque cela
+# ressemble a un site qui marche mal. Pour mettre au point sans consommer le
+# quota — il se compte par domaine enregistre, et celui-ci est partage :
+#   ACME_CA_SERVER="${ACME_STAGING_CA}" ./install.sh
+ACME_CA_SERVER="$(configured_or_default ACME_CA_SERVER "${ACME_PRODUCTION_CA}")"
 
 # Les ports ci-dessous ne sont publies QUE par la surcouche de developpement,
 # jamais par ce deploiement. Ils restent neanmoins dans la plage attribuee :
@@ -296,10 +354,10 @@ render_traefik_routing() {
     # qui retient la directive refusera ensuite le clair pendant deux ans, et
     # un certificat de staging n'est pas reconnu — le portail deviendrait
     # inaccessible sans moyen de revenir en arriere.
-    if [[ -z "${ACME_CA_SERVER:-}" ]]; then
-      hsts_seconds="63072000"
-    else
+    if [[ "${ACME_CA_SERVER:-}" == *acme-staging* ]]; then
       hsts_seconds="0"
+    else
+      hsts_seconds="63072000"
     fi
   else
     entrypoint="web"

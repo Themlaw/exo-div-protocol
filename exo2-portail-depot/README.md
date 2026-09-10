@@ -86,18 +86,28 @@ tourne en root, et il suffit de le lui demander :
 docker run --rm --volume "$PWD:/cible" alpine:3.20 chown -R "$(id -u):$(id -g)" /cible
 ```
 
-### Sur votre machine : `http://localhost:22300`
+### Le script choisit lui-même entre le sous-domaine et `localhost`
 
-C'est le défaut, et c'est délibéré. Le sous-domaine ci-dessus pointe vers **ma**
-machine : l'y mettre par défaut ferait demander à Let's Encrypt un certificat
-pour un nom qui ne résout pas vers la vôtre, et l'installation « qui doit juste
-marcher » échouerait sur la seule chose qui ne pouvait pas marcher. `localhost`
-marche partout, sans DNS et sans certificat.
+`./install.sh` résout `titouan-constance.stage2-div.rayan-drissi.com` et regarde
+si ce nom désigne **une adresse de la machine où il tourne**. Si oui, il déploie
+publiquement : HTTPS, certificat Let's Encrypt, redirection du clair. Sinon il
+retombe sur `http://localhost:22300`, qui ne demande ni DNS ni certificat. Il
+annonce laquelle des deux branches il a prise, à chaque exécution.
 
-### Pour déployer sous un nom public
+Le doute profite toujours au local, et le test est volontairement conservateur —
+nom non résolu, outil absent, adresse sur aucune interface : local. Se tromper
+dans ce sens coûte une variable d'environnement à passer ; se tromper dans
+l'autre demanderait à Let's Encrypt un certificat pour un nom qui ne pointe pas
+vers cette machine, le challenge échouerait, et l'installation s'arrêterait sur
+la seule chose qui ne pouvait pas marcher.
+
+**Une machine derrière du NAT est le cas où la détection se trompe** : l'adresse
+publique n'y est sur aucune interface. Le nom se force alors à la main, dans un
+sens comme dans l'autre :
 
 ```bash
 PUBLIC_HOSTNAME=titouan-constance.stage2-div.rayan-drissi.com ./install.sh
+PUBLIC_HOSTNAME=localhost ./install.sh
 ```
 
 Tout ce qui pourrait être demandé a un défaut qui marche et une variable
@@ -110,7 +120,7 @@ une étape à comprendre — et elle bloque net une exécution non interactive.
 
 | Nom d'hôte | `NODE_ENV` | Portail | Traefik |
 |---|---|---|---|
-| `localhost` (défaut) | `development` | `http://localhost:22300` | écoute en clair |
+| `localhost` (repli) | `development` | `http://localhost:22300` | écoute en clair |
 | un nom public | `production` | `https://<nom>` | TLS, ACME, redirection du clair |
 
 Ce n'est pas un contournement du durcissement, c'est son corollaire. En
@@ -119,13 +129,32 @@ le cookie de session ne peut pas porter `Secure`, et il vaut identité. Aucune
 autorité ne certifiant `localhost`, une installation locale ne peut pas
 satisfaire cette règle — et l'annoncer vaut mieux que la taire.
 
-`ACME_CA_SERVER` pointe par défaut sur le **staging** de Let's Encrypt : le
-quota de certificats est par domaine et par semaine, et ce domaine est partagé.
-Une fois le déploiement vérifié, vider la variable et relancer. HSTS n'est
-activé **que** dans ce cas : un navigateur qui a retenu la directive refuse
-ensuite toute connexion en clair pendant deux ans, et un certificat de staging
-n'est pas reconnu — le portail deviendrait inaccessible sans moyen de revenir en
-arrière.
+`ACME_CA_SERVER` pointe par défaut sur l'**autorité réelle**. Un certificat de
+staging donnerait un site qui répond en HTTPS et qu'aucun navigateur n'accepte :
+un avertissement de sécurité, c'est-à-dire pire qu'une panne franche, puisque
+cela ressemble à un site qui marche mal. Pour mettre au point sans consommer le
+quota — il se compte par domaine enregistré, et celui-ci est partagé entre
+plusieurs candidats :
+
+```bash
+ACME_CA_SERVER=https://acme-staging-v02.api.letsencrypt.org/directory ./install.sh
+```
+
+L'URL est toujours écrite en toutes lettres, jamais laissée vide : le compose la
+lit avec `${ACME_CA_SERVER:-…}`, et cette forme retombe sur son défaut pour une
+variable **vide** autant que pour une variable absente — on obtiendrait donc du
+staging en croyant demander du réel.
+
+HSTS n'est activé que **hors** staging : un navigateur qui a retenu la directive
+refuse ensuite toute connexion en clair pendant deux ans, et un certificat de
+staging n'est reconnu par personne — le portail deviendrait inaccessible sans
+moyen de revenir en arrière.
+
+**Le challenge ACME passe avant la redirection**, et ce n'est pas une
+supposition : Traefik enregistre pour lui un routeur interne
+`acme-http@internal` sur l'entrypoint en clair, avec la priorité
+`9223372036854775807`, la maximale. Aucune règle déclarée dans le fichier de
+routage ne peut la dépasser.
 
 ### Les ports
 

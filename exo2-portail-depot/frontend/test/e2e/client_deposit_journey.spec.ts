@@ -49,7 +49,12 @@ test.describe('Parcours client de bout en bout', () => {
     // Le coeur de ce scenario : les octets vont du NAVIGATEUR a MinIO sans
     // passer par l'API. Une politique CORS fausse sur le bucket casse ici, et
     // nulle part ailleurs — aucun test backend ne voit passer cet envoi.
-    await expect(slot.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+    //
+    // La preuve est cette phrase et non plus une barre a 100 % : l'ecran ne
+    // l'atteint qu'apres que l'envoi direct a REUSSI, et la barre s'efface
+    // desormais a cet instant precis au lieu de rester pleine pendant toute
+    // l'analyse. Le chemin d'echec, lui, n'affiche jamais ce message.
+    await expect(slot.getByText('Envoi termine. Reception de la piece en cours')).toBeVisible();
 
     // Puis la chaine complete : notification MinIO, file de travaux, scan
     // antiviral, verdict. « Deposee » est ce que le client lit quand tout a

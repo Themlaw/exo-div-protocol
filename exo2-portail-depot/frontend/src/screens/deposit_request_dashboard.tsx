@@ -208,8 +208,17 @@ function ExpectedDocumentRow({
   return (
     <chakra.li role="listitem" aria-label={expected.label}>
       <DivCard>
-        <Flex justifyContent="space-between" alignItems="center" gap="4" wrap="wrap">
-          <Stack gap="1">
+        {/* En colonne sur telephone, en ligne des qu'il y a la place : a
+            `space-between` avec repli, la pastille de statut se retrouvait a
+            droite ou en dessous SELON la longueur de l'intitule, et la colonne
+            de statut cessait d'exister pour l'oeil. */}
+        <Flex
+          justifyContent="space-between"
+          flexDirection={{ base: 'column', sm: 'row' }}
+          alignItems={{ base: 'flex-start', sm: 'center' }}
+          gap="4"
+        >
+          <Stack gap="1" minWidth="0">
             <Text fontWeight="heading">{expected.label}</Text>
             <Text color="gray.default">
               {deposited === null ? 'Aucune piece deposee' : deposited.display_filename}
@@ -290,15 +299,29 @@ function ActivityJournal({
               listStyleType="none"
               display="flex"
               flexDirection="column"
-              gap="2"
+              gap="3"
             >
               {page.events.map((event: LawyerActivityEventView) => (
-                <chakra.li key={event.id}>
-                  <Flex gap="3" wrap="wrap">
-                    <Text color="gray.default">{format_date_and_time(event.occurred_at)}</Text>
+                // Trois colonnes qui se replient sans marquage rendaient le
+                // journal illisible des qu'il y avait plusieurs entrees :
+                // l'acteur d'une ligne finissait colle a la date de la suivante,
+                // et rien ne disait ou commencait une entree. Le libelle porte
+                // desormais l'entree, l'heure et l'acteur la commentent en
+                // dessous, et un filet les separe.
+                <chakra.li
+                  key={event.id}
+                  borderLeftWidth="2px"
+                  borderColor="border"
+                  paddingLeft="3"
+                >
+                  <Stack gap="0.5">
                     <Text>{activity_event_label(event.type)}</Text>
-                    <Text color="gray.default">{activity_actor_label(event.actor)}</Text>
-                  </Flex>
+                    <Flex gap="2" wrap="wrap" color="gray.default" fontSize="sm">
+                      <Text>{format_date_and_time(event.occurred_at)}</Text>
+                      <Text aria-hidden="true">—</Text>
+                      <Text>{activity_actor_label(event.actor)}</Text>
+                    </Flex>
+                  </Stack>
                 </chakra.li>
               ))}
             </chakra.ul>

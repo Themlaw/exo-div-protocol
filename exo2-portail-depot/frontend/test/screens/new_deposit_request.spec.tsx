@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 import { NewDepositRequestScreen } from '../../src/screens/new_deposit_request';
@@ -169,6 +169,53 @@ describe('Ecran de creation d une demande', () => {
     expect(
       (JSON.parse(String(request_init.body)) as { security_policy: unknown }).security_policy,
     ).toEqual({ link_lifetime_days: 3, pin_length: 8, max_pin_attempts: 5 });
+  });
+
+  it('marque le champ fautif, et pas seulement le bas de la page', async () => {
+    // Le formulaire fait environ deux mille pixels de haut avec trois
+    // documents : un refus affiche uniquement sous les boutons oblige a
+    // remonter toute la page a l'aveugle, sur telephone surtout. Le champ dit
+    // lui-meme ce qu'on lui reproche.
+    fetch_spy.mockResolvedValue(json_response(400, { violations: ['title_missing'] }));
+
+    render_new_deposit_request();
+    await fill_first_document('y');
+    await userEvent.click(screen.getByRole('button', { name: 'Creer la demande' }));
+
+    const titre: HTMLElement = await screen.findByLabelText('Titre de la demande');
+
+    await waitFor(() => {
+      expect(titre).toHaveAttribute('aria-invalid', 'true');
+    });
+    expect(titre).toHaveAccessibleDescription('Le titre est obligatoire.');
+  });
+
+  it('ne marque que les documents reellement fautifs', async () => {
+    // La violation du backend est NOMMEE, pas numerotee : elle dit « un document
+    // n a pas d intitule », jamais lequel. C'est au formulaire, qui connait sa
+    // propre saisie, de designer les coupables — sinon un document correctement
+    // rempli se verrait accuse a tort.
+    fetch_spy.mockResolvedValue(
+      json_response(400, { violations: ['expected_document_label_missing'] }),
+    );
+
+    render_new_deposit_request();
+    await userEvent.type(screen.getByLabelText('Titre de la demande'), 'Un dossier');
+    await fill_first_document('Piece remplie');
+    await userEvent.click(screen.getByRole('button', { name: 'Ajouter un document' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Creer la demande' }));
+
+    const rempli = within(screen.getByRole('group', { name: 'Document 1' })).getByLabelText(
+      'Intitule',
+    );
+    const vide = within(screen.getByRole('group', { name: 'Document 2' })).getByLabelText(
+      'Intitule',
+    );
+
+    await waitFor(() => {
+      expect(vide).toHaveAttribute('aria-invalid', 'true');
+    });
+    expect(rempli).not.toHaveAttribute('aria-invalid', 'true');
   });
 
   it('rend toutes les violations du backend d un seul coup', async () => {

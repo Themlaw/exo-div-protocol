@@ -116,12 +116,28 @@ describe('Envoi d une piece par le client', () => {
     expect(within(slot).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25');
 
     act(() => {
+      upload.emit_progress(2000, 2000);
+    });
+
+    expect(within(slot).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+
+    act(() => {
       upload.finish(204);
     });
 
+    // La barre DISPARAIT une fois le transfert fini. La laisser pleine a l'ecran
+    // pendant l'analyse, puis apres le depot, en fait un ornement qui ne mesure
+    // plus rien : c'est « Reception de la piece en cours… » qui prend le relais.
     await waitFor(() => {
-      expect(within(slot).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+      expect(within(slot).queryByRole('progressbar')).not.toBeInTheDocument();
     });
+    expect(within(slot).getByRole('status')).toHaveTextContent(
+      'Envoi termine. Reception de la piece en cours',
+    );
+
+    // Et les commandes restent fermees : rouvrir la selection entre la fin du
+    // transfert et l'arrivee de la piece inviterait a envoyer deux fois.
+    expect(within(slot).getByRole('button', { name: "Envoyer Piece d'identite" })).toBeDisabled();
   });
 
   it('dit la taille reelle autorisee quand le fichier est trop lourd', async () => {

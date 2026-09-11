@@ -127,6 +127,10 @@ function DepositSlot({
 
       await upload_to_object_storage({ ticket, file: chosen_file, on_progress: set_progress });
       set_chosen_file(null);
+      // La barre a fini son travail : la laisser pleine a l'ecran pendant
+      // l'analyse, puis apres le depot, en ferait un ornement qui ne mesure plus
+      // rien. C'est « Reception de la piece en cours… » qui dit la suite.
+      set_progress(null);
       // Les octets sont partis, et pourtant l'emplacement est encore vide aux
       // yeux du serveur : il ne comptera la piece qu'au passage du webhook. Le
       // dire au client evite qu'il croie son envoi perdu et recommence.
@@ -160,7 +164,12 @@ function DepositSlot({
             <UploadControls
               expected={expected}
               chosen_file={chosen_file}
-              is_sending={authorization.isPending || progress !== null}
+              // `has_finished_its_upload` compte AUSSI : entre la fin du
+              // transfert et l'arrivee de la piece, rouvrir la selection
+              // inviterait le client a envoyer deux fois le meme document.
+              is_sending={
+                authorization.isPending || progress !== null || has_finished_its_upload
+              }
               is_frozen={is_frozen}
               on_choose={set_chosen_file}
               on_send={(): void => {

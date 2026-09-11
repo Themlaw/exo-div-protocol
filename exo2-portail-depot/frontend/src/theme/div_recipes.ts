@@ -8,6 +8,12 @@ import { DIV_BASE_COLORS } from './div_charter';
 // Le contour du survol est pose en `boxShadow: inset` plutot qu'en `border` :
 // une bordure qui apparait au survol decalerait le contenu d'un pixel, et le
 // bouton bougerait sous le curseur.
+// Le survol est reserve aux pointeurs qui survolent VRAIMENT. Sur tactile, un
+// `:hover` reste accroche apres le tap : le bouton primaire gardait son style
+// inverse et devenait indiscernable d'un bouton secondaire, sur l'ecran meme ou
+// l'on venait d'appuyer.
+const HOVER_CAPABLE_POINTER = '@media (hover: hover)';
+
 const PRIMARY_INSET_OUTLINE = `inset 0 0 0 1px ${DIV_BASE_COLORS.primary}`;
 
 export const primary_button_recipe = defineRecipe({
@@ -28,10 +34,12 @@ export const primary_button_recipe = defineRecipe({
     // La transition porte sur les trois proprietes qui changent, jamais sur
     // `all` : `all` animerait aussi la geometrie et rendrait le bouton mou.
     transition: 'background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease',
-    _hover: {
-      bg: 'accent.surface',
-      color: 'primary',
-      boxShadow: PRIMARY_INSET_OUTLINE,
+    [HOVER_CAPABLE_POINTER]: {
+      _hover: {
+        bg: 'accent.surface',
+        color: 'primary',
+        boxShadow: PRIMARY_INSET_OUTLINE,
+      },
     },
     _focusVisible: {
       outline: '2px solid',
@@ -66,16 +74,19 @@ export const secondary_button_recipe = defineRecipe({
     boxShadow: PRIMARY_INSET_OUTLINE,
     cursor: 'pointer',
     transition: 'background-color 0.18s ease',
-    _hover: { bg: 'accent.surface' },
+    [HOVER_CAPABLE_POINTER]: { _hover: { bg: 'accent.surface' } },
     _focusVisible: {
       outline: '2px solid',
       outlineColor: 'primary',
       outlineOffset: '2px',
     },
+    // Le contour est CONSERVE, seulement attenue : le retirer ne laissait qu'un
+    // mot gris flottant en bout de ligne, qui ne se lisait plus comme un bouton
+    // mais comme une etiquette.
     _disabled: {
       bg: 'surface',
       color: 'gray.default',
-      boxShadow: 'none',
+      boxShadow: `inset 0 0 0 1px ${DIV_BASE_COLORS.gray_light}`,
       cursor: 'not-allowed',
     },
   },
@@ -110,7 +121,7 @@ export const file_chooser_recipe = defineRecipe({
     cursor: 'pointer',
     textAlign: 'center',
     transition: 'background-color 0.18s ease',
-    _hover: { bg: 'accent.surface' },
+    [HOVER_CAPABLE_POINTER]: { _hover: { bg: 'accent.surface' } },
     // Le focus du LABEL ne se voit pas : c'est l'input masque qui le recoit.
     '&:has(input:focus-visible)': {
       outline: '2px solid',
@@ -241,7 +252,7 @@ export const copy_button_recipe = defineRecipe({
         bg: 'surface',
         color: 'primary',
         boxShadow: PRIMARY_INSET_OUTLINE,
-        _hover: { bg: 'accent.surface' },
+        [HOVER_CAPABLE_POINTER]: { _hover: { bg: 'accent.surface' } },
         // Le seul endroit du theme ou l'enfoncement est dessine : sur ce
         // bouton, l'avocat doit voir que son clic a ete pris, meme s'il relache
         // avant que le presse-papier ait repondu.
@@ -280,7 +291,9 @@ export const back_link_recipe = defineRecipe({
     fontWeight: 'heading',
     textDecoration: 'none',
     transition: 'color 0.18s ease',
-    _hover: { color: 'primary', textDecoration: 'underline' },
+    [HOVER_CAPABLE_POINTER]: {
+      _hover: { color: 'primary', textDecoration: 'underline' },
+    },
     _focusVisible: {
       outline: '2px solid',
       outlineColor: 'primary',

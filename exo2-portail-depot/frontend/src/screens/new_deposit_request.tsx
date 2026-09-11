@@ -14,7 +14,7 @@ import {
   type DepositRequestCreationBody,
   type DepositRequestCreationResult,
 } from '../api/lawyer_queries';
-import { violation_messages } from '../api/violation_messages';
+import { violation_message, violation_messages } from '../api/violation_messages';
 import { LAWYER_DEPOSIT_REQUESTS_PATH } from '../routing/front_routes';
 import { PrimaryButton, SecondaryButton } from '../ui/div_button';
 import { DivCard } from '../ui/div_card';
@@ -114,6 +114,8 @@ export function NewDepositRequestScreen(): ReactElement {
     );
   }
 
+  const violations: ReadonlySet<string> = refused_violations(creation.error);
+
   function submit_creation(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
 
@@ -130,7 +132,16 @@ export function NewDepositRequestScreen(): ReactElement {
 
       <form onSubmit={submit_creation} noValidate>
         <Stack gap="6">
-          <TextField label="Titre de la demande" value={title} on_change={set_title} />
+          <TextField
+            label="Titre de la demande"
+            value={title}
+            on_change={set_title}
+            error_message={
+              violations.has('title_missing') && title.trim() === ''
+                ? violation_message('title_missing')
+                : undefined
+            }
+          />
 
           <Stack gap="4">
             {drafts.map((draft: ExpectedDocumentDraft, index: number) => (
@@ -139,6 +150,7 @@ export function NewDepositRequestScreen(): ReactElement {
                 draft={draft}
                 position={index + 1}
                 can_be_removed={drafts.length > 1}
+                violations={violations}
                 on_change={(change) => update_expected_document(draft.local_key, change)}
                 on_remove={() => remove_expected_document(draft.local_key)}
               />
@@ -211,12 +223,14 @@ function ExpectedDocumentFieldset({
   draft,
   position,
   can_be_removed,
+  violations,
   on_change,
   on_remove,
 }: {
   readonly draft: ExpectedDocumentDraft;
   readonly position: number;
   readonly can_be_removed: boolean;
+  readonly violations: ReadonlySet<string>;
   readonly on_change: (change: Partial<Omit<ExpectedDocumentDraft, 'local_key'>>) => void;
   readonly on_remove: () => void;
 }): ReactElement {
@@ -243,6 +257,11 @@ function ExpectedDocumentFieldset({
           label="Intitule"
           value={draft.label}
           on_change={(label: string) => on_change({ label })}
+          error_message={
+            violations.has('expected_document_label_missing') && draft.label.trim() === ''
+              ? violation_message('expected_document_label_missing')
+              : undefined
+          }
         />
 
         <Stack gap="2">
@@ -278,6 +297,16 @@ function ExpectedDocumentFieldset({
         />
       </Stack>
     </DivCard>
+  );
+}
+
+// Le backend rend des violations NOMMEES, jamais numerotees : il dit « un
+// document n'a pas d'intitule », pas lequel. C'est donc au formulaire, seul a
+// connaitre sa propre saisie, de designer les champs coupables — sinon un
+// document correctement rempli se verrait accuse a tort.
+function refused_violations(failure: ApiFailure | null): ReadonlySet<string> {
+  return new Set(
+    failure instanceof ApiFailure && failure.kind === 'rejected_payload' ? failure.violations : [],
   );
 }
 

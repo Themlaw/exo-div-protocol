@@ -24,6 +24,7 @@ import {
   bootstrap_demo_deposit_request,
   type DemoAccessLinkRepository,
   type DemoDepositRequestBootstrapOutcome,
+  type DemoDepositRequestRepository,
 } from './demo_deposit_request_bootstrap';
 import { ACCESS_LINK_REPOSITORY } from '../access_link/access_link_repository';
 import {
@@ -35,8 +36,9 @@ import type { PinHasher } from '../domain/verify_client_pin';
 import { CLOCK, type Clock } from '../shared/clock';
 import { LAWYER_ACCOUNT_REPOSITORY } from '../auth/lawyer_auth.module';
 import type { LawyerAccountRepository } from '../auth/lawyer_account_bootstrap';
-import { APPLICATION_ENVIRONMENT } from '../config/configuration.module';
+import { APPLICATION_ENVIRONMENT, APPLICATION_PROCESS_ROLE } from '../config/configuration.module';
 import type { ApplicationEnvironment } from '../config/environment';
+import type { ApplicationProcessRole } from '../shared/process_role';
 import { APPLICATION_LOGGER } from '../shared/logging/logging.module';
 import type { ApplicationLogger } from '../shared/logging/application_logger';
 
@@ -53,10 +55,14 @@ const DEPOSIT_LOG_CONTEXT = 'deposit';
 export class DemoDepositRequestBootstrapper implements OnApplicationBootstrap {
   constructor(
     @Inject(APPLICATION_ENVIRONMENT) private readonly environment: ApplicationEnvironment,
+    @Inject(APPLICATION_PROCESS_ROLE) private readonly process_role: ApplicationProcessRole,
     @Inject(LAWYER_ACCOUNT_REPOSITORY)
     private readonly lawyer_accounts: LawyerAccountRepository,
+    // Le type le plus ETROIT qui suffise, comme pour les liens et le journal :
+    // l'amorcage compte les demandes de l'avocat et en cree une, il n'a aucune
+    // raison de voir le reste du depot.
     @Inject(DEPOSIT_REQUEST_REPOSITORY)
-    private readonly deposit_requests: DepositRequestRepository,
+    private readonly deposit_requests: DemoDepositRequestRepository,
     @Inject(ACCESS_LINK_REPOSITORY) private readonly access_links: DemoAccessLinkRepository,
     @Inject(ACCESS_LINK_TOKEN_HASHER) private readonly token_hasher: AccessLinkTokenHasher,
     @Inject(CLIENT_PIN_HASHER) private readonly pin_hasher: PinHasher,
@@ -67,6 +73,29 @@ export class DemoDepositRequestBootstrapper implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
+    // Semer des donnees de demonstration n'est pas le metier du travailleur : il
+    // execute des travaux. Les deux processus montent le meme module et
+    // demarrent ensemble sur la meme base — chacun lisait « l'avocat n'a aucune
+    // demande », chacun en creait une, et le second se brisait sur l'empreinte
+    // du jeton de demonstration, qui est fixe par construction.
+    if (this.process_role !== 'api') {
+      return;
+    }
+
+    // Une donnee de demonstration ne doit JAMAIS empecher un processus de
+    // demarrer — c'est deja la regle appliquee plus bas au compte avocat absent.
+    // Faute de quoi un amorcage casse emporte avec lui la file de travaux, et
+    // avec elle tout le scan.
+    try {
+      await this.seed_demo_deposit_request();
+    } catch (seeding_failure: unknown) {
+      this.logger.warn(DEPOSIT_LOG_CONTEXT, 'amorcage de la demande de demonstration abandonne', {
+        error_message: seeding_failure instanceof Error ? seeding_failure.message : 'inconnu',
+      });
+    }
+  }
+
+  private async seed_demo_deposit_request(): Promise<void> {
     const owner_user_id: string | null = await this.lawyer_accounts.find_id_by_email(
       this.environment.demo_lawyer_email,
     );

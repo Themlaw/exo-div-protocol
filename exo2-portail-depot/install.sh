@@ -187,6 +187,8 @@ readonly GRAFANA_ADMIN_PASSWORD_DEFAULT="courbe seuil mesure alerte tableau"
 readonly IMAGE_REPOSITORY_DEFAULT="ghcr.io/themlaw/exo-div-protocol"
 readonly IMAGE_TAG_DEFAULT="latest"
 
+RECREATE_CONTAINERS="non"
+
 if [[ -f "${ENVIRONMENT_FILE}" ]]; then
   announce "Fichier .env deja present : il est conserve tel quel"
   detail "Supprimez-le pour regenerer tous les secrets."
@@ -201,6 +203,12 @@ if [[ -f "${ENVIRONMENT_FILE}" ]]; then
     printf '\nSERVICE_UID="%s"\nSERVICE_GID="%s"\n' "${INVOKING_UID}" "${INVOKING_GID}" \
       >> "${ENVIRONMENT_FILE}"
     detail "SERVICE_UID/SERVICE_GID manquaient : ajoutes (${INVOKING_UID}:${INVOKING_GID})."
+    # Les conteneurs deja en place tournent sous l'ANCIEN uid, et `up -d` les
+    # laisserait tels quels : leur definition n'a pas change, c'est la valeur
+    # qui l'alimente. Un service a donnees qui ne peut plus ecrire son
+    # repertoire ne s'en remet jamais tout seul — Grafana ouvre sa base une
+    # fois, au demarrage, et reste debout sans elle.
+    RECREATE_CONTAINERS="oui"
   fi
 
   # Meme raison : un .env ecrit avant que le lien de demonstration existe ferait
@@ -421,7 +429,12 @@ docker compose -f "${COMPOSE_FILE}" pull ||
 announce "Demarrage de la pile"
 # UNIQUEMENT le fichier de base : la surcouche de developpement publie des ports
 # et rend un acces sortant a Postgres et MinIO.
-docker compose -f "${COMPOSE_FILE}" up -d
+if [[ "${RECREATE_CONTAINERS}" == "oui" ]]; then
+  detail "Conteneurs recrees : ils tournaient sous l'ancien utilisateur."
+  docker compose -f "${COMPOSE_FILE}" up -d --force-recreate
+else
+  docker compose -f "${COMPOSE_FILE}" up -d
+fi
 
 announce "Attente de la disponibilite des services"
 detail "clamav charge sa base de signatures et prend une a deux minutes."
@@ -443,7 +456,10 @@ wait_until_healthy() {
   fail "${service} n'est pas devenu healthy en cinq minutes. Journal : docker compose logs ${service}"
 }
 
-for service in postgres minio clamav app web; do
+# Le travailleur et l'observabilite sont attendus au MEME titre que le reste :
+# un installateur qui ne surveille que cinq services sur neuf annonce un succes
+# franc sur une pile a moitie morte, et c'est exactement ce qui est arrive.
+for service in postgres minio clamav app web worker prometheus grafana; do
   wait_until_healthy "${service}"
 done
 

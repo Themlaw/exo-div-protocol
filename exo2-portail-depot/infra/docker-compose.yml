@@ -200,6 +200,14 @@ services:
       # l'ecrit a partir de l'environnement, avec les droits 0400.
       - ../data/observability/secrets:/etc/prometheus/secrets:ro
       - ../data/prometheus:/prometheus
+    healthcheck:
+      # `wget` plutot que `curl` : l'image ne porte que busybox, et elle rend un
+      # code non nul des que la reponse n'est pas un 2xx.
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:9090/-/healthy']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       # UNIQUEMENT le reseau d'observabilite. Le collecteur n'a aucune raison
       # d'atteindre Postgres ni clamav, et le lui interdire supprime la question.
@@ -240,6 +248,17 @@ services:
       - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - ../data/grafana:/var/lib/grafana
+    healthcheck:
+      # Sonde de VIE, et rien de plus : verifie, mesure faite, que `/api/health`
+      # rend encore 200 quand la base est gelee en lecture seule — il n'y lit
+      # rien d'autre qu'une requete qui passe. Elle rattrape donc un Grafana qui
+      # ne sert plus, pas un Grafana qui ne peut plus ecrire. Contre celui-la,
+      # c'est la recreation des conteneurs par install.sh qui protege.
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:3000/api/health']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
     networks:
@@ -349,6 +368,20 @@ services:
       DEMO_ACCESS_PIN: ${DEMO_ACCESS_PIN}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       TRUSTED_PROXY_HOP_COUNT: ${TRUSTED_PROXY_HOP_COUNT:-1}
+    healthcheck:
+      # Le port de metriques n'ouvre qu'apres l'amorcage complet : une sonde qui
+      # le joint prouve que le travailleur a demarre pour de bon, la ou un
+      # conteneur « Up » ne prouvait rien. Le secret est lu dans l'environnement
+      # et jamais ecrit ici : une ligne de commande est lisible par tout le monde.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:9101/metrics',{headers:{authorization:process.env.INTERNAL_STORAGE_WEBHOOK_SECRET}}).then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     depends_on:

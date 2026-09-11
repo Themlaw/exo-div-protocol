@@ -6,6 +6,7 @@ import type { ApplicationEnvironment } from './config/environment';
 import { APPLICATION_LOGGER } from './shared/logging/logging.module';
 import type { ApplicationLogger } from './shared/logging/application_logger';
 import { describe_startup_failure } from './shared/startup_failure_report';
+import { declare_worker_process } from './shared/process_role';
 import {
   RECONCILE_DEPOSITS_TASK,
   SCAN_DEPOSITED_FILE_TASK,
@@ -57,6 +58,11 @@ const RECONCILIATION_CRONTAB = `*/15 * * * * ${RECONCILE_DEPOSITS_TASK} ?max=1`;
 // les memes reglages — parce que deux cablages separes auraient fini par
 // diverger sur un detail qu'aucun test n'aurait couvert.
 async function bootstrap_worker(): Promise<void> {
+  // AVANT de monter le module : les crochets de demarrage s'executent pendant
+  // la creation du contexte, et ceux qui n'appartiennent qu'a l'API doivent
+  // pouvoir s'en abstenir.
+  declare_worker_process();
+
   const application_context = await NestFactory.createApplicationContext(AppModule, {
     logger: false,
     abortOnError: false,

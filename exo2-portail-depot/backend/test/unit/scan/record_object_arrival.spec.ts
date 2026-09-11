@@ -268,6 +268,43 @@ describe('ObjectArrivalRecordingService', () => {
     ]);
   });
 
+  // MinIO rejoue sa notification jusqu'a obtenir un 2xx. Le jour ou l'enfilement
+  // echoue — file absente, base indisponible — la meme arrivee revient toutes
+  // les trois secondes, et un journal qui compte les notifications plutot que
+  // les depots noie l'activite de la demande sous la panne.
+  it('ne journalise pas une seconde fois la meme arrivee rejouee par le stockage', async () => {
+    const context: ObjectArrivalTestContext = build_object_arrival_test_context();
+    const file: DepositedFile = build_deposited_file({ status: 'pending_upload' });
+    context.deposited_files.seed(file);
+    const notification: ObjectArrivalNotification = build_arrival_notification({
+      object_key: file.object_key,
+    });
+
+    await context.service.record(notification);
+    await context.service.record(notification);
+    await context.service.record(notification);
+
+    expect(context.activity_events.recorded_events).toHaveLength(1);
+  });
+
+  // Le vrai second depot, lui, DOIT laisser une trace : le client a redemande
+  // une autorisation, la piece est repassee en attente, et c'est un evenement
+  // que l'avocat doit voir passer.
+  it('journalise a nouveau quand la piece est repassee en attente de son objet', async () => {
+    const context: ObjectArrivalTestContext = build_object_arrival_test_context();
+    const file: DepositedFile = build_deposited_file({ status: 'pending_upload' });
+    context.deposited_files.seed(file);
+    const notification: ObjectArrivalNotification = build_arrival_notification({
+      object_key: file.object_key,
+    });
+
+    await context.service.record(notification);
+    await context.deposited_files.save_state({ ...file, status: 'pending_upload' });
+    await context.service.record(notification);
+
+    expect(context.activity_events.recorded_events).toHaveLength(2);
+  });
+
   it('ne journalise rien sur une notification venue d\'un autre bucket que la quarantaine', async () => {
     const context: ObjectArrivalTestContext = build_object_arrival_test_context();
     const file: DepositedFile = build_deposited_file({ status: 'pending_upload' });

@@ -71,6 +71,14 @@ export class ObjectArrivalRecordingService implements ObjectArrivalRecorder {
       return { kind: 'orphan_object_deleted' };
     }
 
+    // Une piece qui n'attendait plus son objet a DEJA recu cette arrivee : MinIO
+    // rejoue ses notifications jusqu'a obtenir un 2xx, et un vrai second depot
+    // passe forcement par une nouvelle autorisation, donc par une nouvelle cle
+    // d'objet et une ligne remise en attente. C'est ce qui distingue le depot du
+    // rejeu, et c'est le journal qui en depend : la file, elle, se protege deja
+    // par sa cle d'unicite.
+    const was_still_awaiting_its_object: boolean = file.status === 'pending_upload';
+
     const now: Date = this.dependencies.clock.now();
     const file_after_arrival: DepositedFile = {
       // Le meme reset qu'une reecriture : un fichier deja juge qui recoit un
@@ -92,7 +100,9 @@ export class ObjectArrivalRecordingService implements ObjectArrivalRecorder {
     // C'est l'ARRIVEE qui fait le depot, pas la reservation : une autorisation
     // d'ecriture que le client n'utilise jamais n'a rien depose, et la
     // journaliser ferait un journal de pieces inexistantes.
-    await this.journalize_reception(file_after_arrival);
+    if (was_still_awaiting_its_object) {
+      await this.journalize_reception(file_after_arrival);
+    }
 
     // Enfile APRES l'ecriture : un job qui partirait avant trouverait une piece
     // encore en attente d'upload et conclurait a un objet absent.

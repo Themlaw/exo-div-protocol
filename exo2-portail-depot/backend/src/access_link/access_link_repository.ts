@@ -126,6 +126,11 @@ export class DrizzleAccessLinkRepository implements AccessLinkRepository {
           pin_hash: input.issuance.pin_hash,
           pin_length: input.issuance.security_policy.pin_length,
           max_pin_attempts: input.issuance.security_policy.max_pin_attempts,
+          // L'echeance est calculee a partir de l'horloge d'appel : laisser la
+          // date de creation au serveur de base ferait porter la contrainte
+          // « expires_at > created_at » sur deux horloges, qui n'ont aucune
+          // raison de s'accorder. Une seule horloge par ligne.
+          created_at: input.now,
           expires_at: input.issuance.expires_at,
         })
         .returning();

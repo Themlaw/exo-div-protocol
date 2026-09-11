@@ -141,6 +141,31 @@ describe("Depot des liens d'acces", () => {
     expect(surviving_requests).toHaveLength(1);
   });
 
+  // L'horloge injectee est la seule source de « maintenant » : si la ligne
+  // melangeait l'instant du code et celui du serveur de base, la contrainte
+  // « expires_at > created_at » se prononcerait sur deux horloges differentes
+  // et refuserait une emission parfaitement valide des que les deux divergent.
+  it("l'instant d'emission est celui de l'horloge d'appel, pas celui du serveur de base", async () => {
+    const deposit_request_id = await create_deposit_request(owner_user_id);
+    const six_months_before_the_database_clock = new Date('2026-03-12T10:00:00.000Z');
+    const issuance = build_issuance({
+      token_hmac: `hmac-horloge-${Date.now()}`,
+      expires_at: new Date(
+        six_months_before_the_database_clock.getTime() + 7 * 24 * 60 * 60 * 1000,
+      ),
+    });
+
+    await access_links.issue_link_replacing_current({
+      deposit_request_id,
+      owner_user_id,
+      issuance,
+      now: six_months_before_the_database_clock,
+    });
+
+    const issued: AccessLink | null = await access_links.find_by_token_hmac(issuance.token_hmac);
+    expect(issued?.created_at).toEqual(six_months_before_the_database_clock);
+  });
+
   // La contrainte est dans le moteur, pas dans le code : c'est elle qui tient
   // quand deux emissions se croisent.
   it("la base refuse un second lien actif sur la meme demande", async () => {

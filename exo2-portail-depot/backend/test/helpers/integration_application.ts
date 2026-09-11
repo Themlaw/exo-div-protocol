@@ -203,7 +203,15 @@ export async function create_integration_test_application(
     logger: app.get<ApplicationLogger>(APPLICATION_LOGGER),
   });
 
-  await app.init();
+  // Une application qui echoue a demarrer garde quand meme son pool Postgres
+  // ouvert : sans cette fermeture, Jest ne rend jamais la main et la CI reste
+  // pendue pendant une heure sur ce qui n'est qu'un test rouge.
+  try {
+    await app.init();
+  } catch (initialisation_failure: unknown) {
+    await app.close();
+    throw initialisation_failure;
+  }
 
   const database: ApplicationDatabase = app.get(APPLICATION_DATABASE);
   await reset_state_shared_between_tests(database);
